@@ -3,10 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DeepLabv3p(nn.Module):
-    def __init__(self, backbone, classifier):
+    # def __init__(self, backbone, classifier):
+    def __init__(self, backbone, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
         super(DeepLabv3p, self).__init__()
         self.backbone = backbone
-        self.classifier = classifier
+        self.classifier = DeepLabHeadV3Plus(in_channels, low_level_channels, num_classes, aspp_dilate)
 
     def forward(self, x):
         input_shape = x.shape[-2:]
@@ -111,12 +112,3 @@ class ASPP(nn.Module):
             res.append(conv(x))
         res = torch.cat(res, dim=1)
         return self.project(res)
-
-if __name__ == '__main__':
-    print('hello')
-    in_planes = 2048
-    low_level_planes = 256
-    num_classes = 21
-    aspp_dilate = [12, 24, 36]    # paper: [6, 12, 18]
-
-    DeepLabHeadV3Plus(in_planes, low_level_planes, num_classes, aspp_dilate)
