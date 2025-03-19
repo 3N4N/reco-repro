@@ -12,9 +12,8 @@ class DeepLabv3p(nn.Module):
         input_shape = x.shape[-2:]
         features = self.backbone(x)
         prediction = self.classifier(features)
-        upsampled_prediction = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
-        features = {'out': upsampled_prediction}
-        return features
+        upsampled_prediction = F.interpolate(prediction, size=input_shape, mode='bilinear', align_corners=False)
+        return {'out': upsampled_prediction}
 
 class DeepLabHeadV3Plus(nn.Module):
     def __init__(self, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
@@ -37,12 +36,10 @@ class DeepLabHeadV3Plus(nn.Module):
         self._init_weight()
 
     def forward(self, feature):
-        low_level_features = self.project( feature['low_level'] )    # 32x48x129x129
-        low_level_shape = low_level_features.shape[2:]
-        encoded_features = self.aspp(feature['out'])                  # 32x256x17x17
-        upsampled_features = F.interpolate(encoder_output, size=low_level_shape, mode='bilinear', align_corners=False)
-        prediction = self.classifier( torch.cat( [ low_level_features, upsampled_features ], dim=1 ) )
-        return upsampled_prediction
+        low_level_feature = self.project( feature['low_level'] )
+        output_feature = self.aspp(feature['out'])
+        output_feature = F.interpolate(output_feature, size=low_level_feature.shape[2:], mode='bilinear', align_corners=False)
+        return self.classifier( torch.cat( [ low_level_feature, output_feature ], dim=1 ) )
 
     def _init_weight(self):
         for m in self.modules():
@@ -65,7 +62,7 @@ class ASPPPooling(nn.Sequential):
     def __init__(self, in_channels, out_channels):
         modules = [
             nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),    # paper: stride=2
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         ]
@@ -83,9 +80,10 @@ class ASPP(nn.Module):
         out_channels = 256
         modules = []
         modules.append(nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),    # paper: stride=2
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)))
+            nn.ReLU(inplace=True)
+        ))
 
         rate1, rate2, rate3 = tuple(atrous_rates)
         modules.append(ASPPConv(in_channels, out_channels, rate1))
@@ -114,6 +112,6 @@ if __name__ == '__main__':
     in_planes = 2048
     low_level_planes = 256
     num_classes = 21
-    aspp_dilate = [12,24,36]    # paper: [6,12,18]
+    aspp_dilate = [12, 24, 36]    # paper: [6, 12, 18]
 
     DeepLabHeadV3Plus(in_planes, low_level_planes, num_classes, aspp_dilate)
