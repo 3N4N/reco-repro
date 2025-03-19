@@ -3,22 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DeepLabv3p(nn.Module):
-    # def __init__(self, backbone, classifier):
     def __init__(self, backbone, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
         super(DeepLabv3p, self).__init__()
+
         self.backbone = backbone
-        self.classifier = DeepLabHeadV3Plus(in_channels, low_level_channels, num_classes, aspp_dilate)
-
-    def forward(self, x):
-        input_shape = x.shape[-2:]
-        features = self.backbone(x)
-        prediction = self.classifier(features)
-        upsampled_prediction = F.interpolate(prediction, size=input_shape, mode='bilinear', align_corners=False)
-        return {'out': upsampled_prediction}
-
-class DeepLabHeadV3Plus(nn.Module):
-    def __init__(self, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
-        super(DeepLabHeadV3Plus, self).__init__()
         self.encoder = ASPP(in_channels, aspp_dilate)
 
         self.project = nn.Sequential(
@@ -33,12 +21,16 @@ class DeepLabHeadV3Plus(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(256, num_classes, 1)
         )
-        self._init_weight()
 
-    def forward(self, features):
+    def forward(self, x):
+        input_shape = x.shape[-2:]
+        features = self.backbone(x)
+
         encoder_output = self.encoder(features['out'])
         decoder_output = self.decode(encoder_output, features['low_level'])
-        return decoder_output
+
+        prediction = F.interpolate(decoder_output, size=input_shape, mode='bilinear', align_corners=False)
+        return {'out': prediction}
 
     def decode(self, encoder_output, low_level_features):
         low_level_features = self.project(low_level_features)
@@ -47,13 +39,6 @@ class DeepLabHeadV3Plus(nn.Module):
         prediction = self.classifier(concat_output)
         return prediction
 
-    def _init_weight(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight)
-            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
 
 class ASPPConv(nn.Sequential):
     def __init__(self, in_channels, out_channels, dilation):
