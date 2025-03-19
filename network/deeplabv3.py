@@ -18,14 +18,13 @@ class DeepLabv3p(nn.Module):
 class DeepLabHeadV3Plus(nn.Module):
     def __init__(self, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
         super(DeepLabHeadV3Plus, self).__init__()
+        self.encoder = ASPP(in_channels, aspp_dilate)
+
         self.project = nn.Sequential(
             nn.Conv2d(low_level_channels, 48, 1, bias=False),
             nn.BatchNorm2d(48),
             nn.ReLU(inplace=True),
         )
-
-        # Encoder
-        self.aspp = ASPP(in_channels, aspp_dilate)
 
         self.classifier = nn.Sequential(
             nn.Conv2d(304, 256, 3, padding=1, bias=False),
@@ -35,11 +34,17 @@ class DeepLabHeadV3Plus(nn.Module):
         )
         self._init_weight()
 
-    def forward(self, feature):
-        low_level_features = self.project( feature['low_level'] )
-        encoder_features = self.aspp(feature['out'])
-        upsampled_encoder_features = F.interpolate(encoder_features, size=low_level_features.shape[2:], mode='bilinear', align_corners=False)
-        return self.classifier( torch.cat( [ low_level_features, upsampled_encoder_features ], dim=1 ) )
+    def forward(self, features):
+        encoder_output = self.encoder(features['out'])
+        decoder_output = self.decode(encoder_output, features['low_level'])
+        return decoder_output
+
+    def decode(self, encoder_output, low_level_features):
+        low_level_features = self.project(low_level_features)
+        upsampled_encoder_output = F.interpolate(encoder_output, size=low_level_features.shape[2:], mode='bilinear', align_corners=False)
+        concat_output = torch.cat( [ low_level_features, upsampled_encoder_output ], dim=1 )
+        prediction = self.classifier(concat_output)
+        return prediction
 
     def _init_weight(self):
         for m in self.modules():
