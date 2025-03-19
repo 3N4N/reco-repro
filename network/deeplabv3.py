@@ -36,10 +36,10 @@ class DeepLabHeadV3Plus(nn.Module):
         self._init_weight()
 
     def forward(self, feature):
-        low_level_feature = self.project( feature['low_level'] )
-        output_feature = self.aspp(feature['out'])
-        output_feature = F.interpolate(output_feature, size=low_level_feature.shape[2:], mode='bilinear', align_corners=False)
-        return self.classifier( torch.cat( [ low_level_feature, output_feature ], dim=1 ) )
+        low_level_features = self.project( feature['low_level'] )
+        encoder_features = self.aspp(feature['out'])
+        upsampled_encoder_features = F.interpolate(encoder_features, size=low_level_features.shape[2:], mode='bilinear', align_corners=False)
+        return self.classifier( torch.cat( [ low_level_features, upsampled_encoder_features ], dim=1 ) )
 
     def _init_weight(self):
         for m in self.modules():
