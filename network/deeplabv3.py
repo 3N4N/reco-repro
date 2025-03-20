@@ -100,3 +100,12 @@ class ASPP(nn.Module):
             res.append(conv(x))
         res = torch.cat(res, dim=1)
         return self.project(res)
+
+
+if __name__ == '__main__':
+    from torchvision import models
+    backbone = models._utils.IntermediateLayerGetter(
+        models.resnet101(pretrained=True),
+        {'layer4': 'out', 'layer1': 'low_level'}
+    )
+    model = DeepLabv3p(backbone, 2048, 256, 21, [12,24,36])

@@ -11,7 +11,7 @@ class ReCoNet(DeepLabv3p):
             nn.Conv2d(304, 256, 3, padding=1, bias=False),
             nn.BatchNorm2d(256),
             nn.ReLU(),
-            nn.Conv2d(256, output_dim, 1)
+            nn.Conv2d(256, low_level_channels, 1)
         )
     def forward(self, x):
         classifier_output = super().forward(x)
@@ -22,3 +22,11 @@ class ReCoNet(DeepLabv3p):
             'out': prediction,
             'reco': representation,
         }
+
+if __name__ == '__main__':
+    from torchvision import models
+    backbone = models._utils.IntermediateLayerGetter(
+        models.resnet101(pretrained=True),
+        {'layer4': 'out', 'layer1': 'low_level'}
+    )
+    model = ReCoNet(backbone, 2048, 256, 21, [12,24,36])
