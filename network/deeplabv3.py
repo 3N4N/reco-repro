@@ -23,21 +23,24 @@ class DeepLabv3p(nn.Module):
         )
 
     def forward(self, x):
-        input_shape = x.shape[-2:]
         features = self.backbone(x)
 
         encoder_output = self.encoder(features['out'])
-        decoder_output = self.decode(encoder_output, features['low_level'])
+        decoder_output = self.decoder(encoder_output, features['low_level'])
+        prediction = self.classifier(decoder_output)
+        prediction = F.interpolate(prediction, size=x.shape[-2:], mode='bilinear', align_corners=False)
 
-        prediction = F.interpolate(decoder_output, size=input_shape, mode='bilinear', align_corners=False)
-        return {'out': prediction}
+        return {
+            'out': prediction,
+            'encoder': encoder_output,
+            'decoder': decoder_output,
+        }
 
-    def decode(self, encoder_output, low_level_features):
+    def decoder(self, encoder_output, low_level_features):
         low_level_features = self.project(low_level_features)
         upsampled_encoder_output = F.interpolate(encoder_output, size=low_level_features.shape[2:], mode='bilinear', align_corners=False)
         concat_output = torch.cat( [ low_level_features, upsampled_encoder_output ], dim=1 )
-        prediction = self.classifier(concat_output)
-        return prediction
+        return concat_output
 
 
 class ASPPConv(nn.Sequential):
