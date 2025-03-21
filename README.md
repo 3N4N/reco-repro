@@ -9,6 +9,6 @@ Enan
 
 Sanjeepan
 
-- [x] Implement dataloaders
+- [x] Implement dataloaders for pascal and cityscapes
 - [x] Implement supervised learning pipeline
 
