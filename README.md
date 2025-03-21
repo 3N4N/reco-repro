@@ -9,6 +9,7 @@ Enan
 
 Sanjeepan
 
+- [x] Implement Mean Teacher Student farmework
 - [x] Implement dataloaders for pascal and cityscapes
 - [x] Implement supervised learning pipeline
 
