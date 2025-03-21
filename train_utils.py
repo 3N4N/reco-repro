@@ -1,3 +1,5 @@
+import torch
+import numpy as np
 import torch.nn.functional as F
 
 def adjust_learning_rate(optimizer, initial_lr, iter, total_iter, power=0.9):
@@ -28,9 +30,12 @@ def compute_iou(outputs, targets):
 
 def calculate_unsupervised_loss(outputs, pseudo_labels, conf_mask):
     if conf_mask.sum() > 0:
+        outputs = outputs.permute(0, 2, 3, 1)
+        masked_outputs = outputs[conf_mask].view(-1, outputs.size(3))
+        masked_labels = pseudo_labels[conf_mask].view(-1)
         unsup_loss = F.cross_entropy(
-            outputs[conf_mask], 
-            pseudo_labels[conf_mask], 
+            masked_outputs, 
+            masked_labels, 
             ignore_index=-1
         )
     else:
