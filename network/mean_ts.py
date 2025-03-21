@@ -19,3 +19,13 @@ class TeacherModel(nn.Module):
         for teacher_param, student_param in zip(self.model.parameters(), student_model.parameters()):
             teacher_param.data = self.ema_decay * teacher_param.data + (1 - self.ema_decay) * student_param.data
     
+    def generate_pseudo_labels(self, unlabeled_imgs, confidence_threshold=0.95):
+        self.model.eval()
+        with torch.no_grad():
+            teacher_output = self.model(unlabeled_imgs)['out']
+            probs = F.softmax(teacher_output, dim=1)
+            confidence, pseudo_labels = torch.max(probs, dim=1)
+            confidence_mask = confidence > confidence_threshold
+            
+        return pseudo_labels, confidence_mask, confidence
+    
