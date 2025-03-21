@@ -1,3 +1,5 @@
+import torch.nn.functional as F
+
 def adjust_learning_rate(optimizer, initial_lr, iter, total_iter, power=0.9):
     lr = initial_lr * (1 - iter / total_iter) ** power
     for param_group in optimizer.param_groups:
@@ -23,3 +25,15 @@ def compute_iou(outputs, targets):
     
     return np.mean(ious) if ious else 0
 
+
+def calculate_unsupervised_loss(outputs, pseudo_labels, conf_mask):
+    if conf_mask.sum() > 0:
+        unsup_loss = F.cross_entropy(
+            outputs[conf_mask], 
+            pseudo_labels[conf_mask], 
+            ignore_index=-1
+        )
+    else:
+        unsup_loss = torch.tensor(0.0).to(device)
+    
+    return unsup_loss
