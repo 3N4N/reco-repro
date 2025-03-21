@@ -9,6 +9,6 @@ Enan
 
 Sanjeepan
 
-- [] Implement dataloaders
-- [] Implement supervised learning pipeline
+- [x] Implement dataloaders
+- [x] Implement supervised learning pipeline
 
