@@ -15,3 +15,7 @@ class TeacherModel(nn.Module):
     def forward(self, x):
         return self.model(x)
     
+    def update_weights(self, student_model):
+        for teacher_param, student_param in zip(self.model.parameters(), student_model.parameters()):
+            teacher_param.data = self.ema_decay * teacher_param.data + (1 - self.ema_decay) * student_param.data
+    
