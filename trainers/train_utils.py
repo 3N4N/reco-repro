@@ -2,6 +2,8 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 def adjust_learning_rate(optimizer, initial_lr, iter, total_iter, power=0.9):
     lr = initial_lr * (1 - iter / total_iter) ** power
     for param_group in optimizer.param_groups:
@@ -9,12 +11,12 @@ def adjust_learning_rate(optimizer, initial_lr, iter, total_iter, power=0.9):
     return lr
 
 
-def compute_iou(outputs, targets):
+def compute_iou(outputs, targets, num_classes):
     smooth = 1e-6
     preds = torch.argmax(outputs, dim=1)
     
     ious = []
-    for cls in range(1, 21): 
+    for cls in range(1, num_classes):
         pred_inds = preds == cls
         target_inds = targets == cls
         
