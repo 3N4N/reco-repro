@@ -137,25 +137,19 @@ def select_balanced_samples(root_dir, num_samples=5, is_training=True):
     candidate_ids = all_ids.copy()
     random.shuffle(candidate_ids)
     
-    # Count appearance of each class
     class_counts = np.zeros(21)  # Pascal VOC has 21 classes (0-20)
     min_class_ids = np.arange(21)
     
-    # Keep a reserve pool of images
     reserve_ids = []
     
-    # Select images until we have enough
     while len(selected_ids) < num_samples:
-        # Get next candidate or use reserve pool if needed
         if candidate_ids:
             current_id = candidate_ids.pop()
         else:
-            # Restart from reserve pool if we've exhausted candidates
             candidate_ids = reserve_ids.copy()
             current_id = candidate_ids.pop()
             reserve_ids = []
         
-        # Check class distribution in this image
         mask_path = os.path.join(root_dir, 'SegmentationClassAug', f'{current_id}.png')
         mask = np.array(Image.open(mask_path))
         
@@ -268,7 +262,7 @@ class PascalVOCLoader:
         
         val_loader = DataLoader(
             val_dataset,
-            batch_size=4,
+            batch_size=self.batch_size,
             shuffle=False,
             num_workers=4
         )
