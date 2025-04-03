@@ -44,3 +44,38 @@ def calculate_unsupervised_loss(outputs, pseudo_labels, conf_mask):
         unsup_loss = torch.tensor(0.0).to(device)
     
     return unsup_loss
+
+def reco_loss_func(rep, label, mask, prob=None, temp=0.5, num_queries=256, num_negatives=256):
+    B, C, H, W = rep.shape
+    rep = rep.reshape(B, C, -1)  
+    label = label.reshape(B, -1)  
+    mask = mask.reshape(B, -1)  
+    
+    # Get unique classes in the batch
+    classes = torch.unique(label)
+    classes = classes[classes != 255]  
+    
+    if len(classes) == 0:
+        return torch.tensor(0.0, device=rep.device, requires_grad=True)
+    
+    # Compute class representations (means)
+    r_c_plus_k = {} 
+    for c in classes:
+        c_mask = (label == c) & mask 
+        if c_mask.sum() == 0:
+            continue
+        
+        class_pixels = []
+        for b in range(B):
+            b_mask = c_mask[b] 
+            if b_mask.sum() > 0:
+                b_rep = rep[b, :, b_mask] 
+                class_pixels.append(b_rep)
+        
+        if len(class_pixels) > 0:
+            all_pixels = torch.cat(class_pixels, dim=1)  
+            r_c_plus_k[c.item()] = all_pixels.mean(dim=1) 
+    
+    # TODO: Implement contrastive loss computation 
+    
+    return torch.tensor(0.0, device=rep.device, requires_grad=True)
