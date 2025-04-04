@@ -8,17 +8,16 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 from tqdm import tqdm
 import numpy as np
-
 import sys
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-
 from data.cityscapes_data_loader import CityscapesLoader
 from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
 from network.deeplabv3 import DeepLabv3p
 from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
-
+from wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
+import wandb
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semi-supervised semantic segmentation')
@@ -45,7 +44,7 @@ def parse_args():
                         help='Power for polynomial decay of learning rate')
     parser.add_argument('--iterations', type=int, default=40000,
                         help='Total number of training iterations')
-    parser.add_argument('--max-epochs', type=int, default=100,
+    parser.add_argument('--max-epochs', type=int, default=500,
                         help='Maximum number of epochs')
     
     # Model arguments
@@ -109,6 +108,13 @@ def main():
     
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     
+    wandb_config = vars(args)
+    init_wandb(
+        project_name="reco_v1", 
+        config=wandb_config,
+        run_name=f"{args.dataset}_{args.model}_labeled{args.num_labeled}_semi_supervised_full"
+    )
+    
     if args.dataset == 'pascal':
         loader = PascalVOCLoader(
             data_path=args.data_path,
@@ -134,6 +140,8 @@ def main():
     student_model = student_model.to(device)
     
     teacher_model = TeacherModel(student_model, ema_decay=args.ema_decay).to(device)
+    
+    watch_model(student_model)
     
     optimizer = optim.SGD(
         student_model.parameters(),
@@ -193,6 +201,7 @@ def main():
             eta = conf_ratio if conf_ratio > 0 else 0.1
             total_loss = supervised_loss + args.unsup_weight * eta * unsupervised_loss
             
+            reco_loss_val = None
             if args.reco and 'decoder' in student_labeled_output and 'decoder' in student_unlabeled_output:
                 
                 labeled_rep = student_labeled_output['decoder']
@@ -213,12 +222,9 @@ def main():
                 
                 B = unlabeled_img.shape[0]  
                 H, W = unlabeled_img.shape[2], unlabeled_img.shape[3] 
-
                 if conf_mask.dim() == 1: 
                     conf_mask = conf_mask.reshape(B, H*W)  
-
                 conf_mask = conf_mask.reshape(B, 1, H, W)  
-
                 if pseudo_labels.dim() == 1:  
                     pseudo_labels = pseudo_labels.reshape(B, H, W)  
                 elif pseudo_labels.dim() == 2 and pseudo_labels.shape[0] == B:
@@ -265,16 +271,34 @@ def main():
                     num_negatives=args.reco_num_negatives
                 )
                 
+                reco_loss_val = reco_loss.item()
                 total_loss = total_loss + args.reco_weight * reco_loss
                 
                 if total_iterations % 100 == 0:
-                    print(f"ReCo loss: {reco_loss.item():.4f}")
+                    print(f"ReCo loss: {reco_loss_val:.4f}")
             
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
             
             teacher_model.update_weights(student_model)
+            
+            if total_iterations % 10 == 0:
+                log_training_metrics(
+                    loss=total_loss.item(),
+                    current_lr=current_lr,
+                    epoch=epoch + 1,
+                    iteration=total_iterations,
+                    reco_loss=reco_loss_val
+                )
+                
+                metrics = {
+                    "train/supervised_loss": supervised_loss.item(),
+                    "train/unsupervised_loss": unsupervised_loss.item(),
+                    "train/reco_loss_val":reco_loss_val if reco_loss_val else 0,
+                    "train/confidence_ratio": conf_ratio
+                }
+                wandb.log(metrics, step=total_iterations)
             
             total_iterations += 1
             pbar.update(1)
@@ -283,8 +307,8 @@ def main():
                   f"Loss: {total_loss.item():.4f}, Sup: {supervised_loss.item():.4f}, " \
                   f"Unsup: {unsupervised_loss.item():.4f}, LR: {current_lr:.6f}, Conf: {conf_ratio:.2f}"
             
-            if args.reco:
-                desc += f", ReCo: {reco_loss.item():.4f}" if 'reco_loss' in locals() else ""
+            if args.reco and reco_loss_val is not None:
+                desc += f", ReCo: {reco_loss_val:.4f}"
                 
             pbar.set_description(desc)
             
@@ -315,12 +339,16 @@ def main():
                 print(f"Validation Loss: {val_loss:.4f}, Mean IoU: {mean_iou:.4f}")
                 print("-"*50)
                 
+                log_validation_metrics(val_loss, mean_iou, total_iterations)
+                
                 if mean_iou > best_iou:
                     best_iou = mean_iou
                     torch.save(
                         student_model.state_dict(), 
                         os.path.join(args.checkpoint_dir, "best_student_model.pth")
                     )
+                    
+                    update_summary(best_iou, total_iterations)
             
             if total_iterations % args.save_interval == 0:
                 torch.save({
@@ -345,7 +373,8 @@ def main():
         student_model.state_dict(), 
         os.path.join(args.checkpoint_dir, "final_student_model.pth")
     )
-
+    
+    finish()
 
 if __name__ == '__main__':
     main()
