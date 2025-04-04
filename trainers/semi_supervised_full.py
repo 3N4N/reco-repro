@@ -17,6 +17,7 @@ from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
 from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
 
+save_stuff = False
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semi-supervised semantic segmentation')
@@ -196,14 +197,14 @@ def main():
                 print(f"Validation Loss: {val_loss:.4f}, Mean IoU: {mean_iou:.4f}")
                 print("-"*50)
                 
-                if mean_iou > best_iou:
+                if save_stuff and mean_iou > best_iou:
                     best_iou = mean_iou
                     torch.save(
                         student_model.state_dict(), 
                         os.path.join(args.checkpoint_dir, "best_student_model.pth")
                     )
             
-            if total_iterations % args.save_interval == 0:
+            if save_stuff and total_iterations % args.save_interval == 0:
                 torch.save({
                     'epoch': epoch + 1,
                     'iteration': total_iterations,
@@ -222,10 +223,11 @@ def main():
     
     pbar.close()
     print(f"Training completed! Best validation IoU: {best_iou:.4f}")
-    torch.save(
-        student_model.state_dict(), 
-        os.path.join(args.checkpoint_dir, "final_student_model.pth")
-    )
+    if save_stuff:
+        torch.save(
+            student_model.state_dict(), 
+            os.path.join(args.checkpoint_dir, "final_student_model.pth")
+        )
 
 
 if __name__ == '__main__':

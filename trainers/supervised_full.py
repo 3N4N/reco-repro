@@ -17,6 +17,7 @@ from data.pascal_data_loader import PascalVOCDataset, PascalVOCLoader
 from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
 
 
+save_stuff = False
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semantic Segmentation Training Script')
@@ -159,14 +160,14 @@ def main():
                 print(f"Validation Loss: {val_loss:.4f}, Mean IoU: {mean_iou:.4f}")
                 print("-"*50)
                 
-                if mean_iou > best_iou:
+                if save_stuff and mean_iou > best_iou:
                     best_iou = mean_iou
                     checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_best.pth")
                     torch.save(model.state_dict(), checkpoint_path)
                     print(f"Saved best model to {checkpoint_path}")
             
             # Save checkpoint periodically
-            if total_iterations % 10000 == 0:
+            if save_stuff and total_iterations % 10000 == 0:
                 checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_iter_{total_iterations}.pth")
                 torch.save({
                     'epoch': epoch + 1,
@@ -189,9 +190,10 @@ def main():
     print(f"Training completed! Best validation IoU: {best_iou:.4f}")
     
     # Save final model
-    final_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_final.pth")
-    torch.save(model.state_dict(), final_path)
-    print(f"Saved final model to {final_path}")
+    if save_stuff:
+        final_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_final.pth")
+        torch.save(model.state_dict(), final_path)
+        print(f"Saved final model to {final_path}")
 
 if __name__ == "__main__":
     main()
