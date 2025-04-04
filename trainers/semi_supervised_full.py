@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torchvision.models.segmentation import fcn_resnet50
+from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 from tqdm import tqdm
 import numpy as np
 
@@ -27,6 +27,9 @@ def parse_args():
                         help='Path to the dataset')
     parser.add_argument('--num-labeled', type=int, default=5,
                         help='Number of labeled examples')
+    parser.add_argument('--model', type=str, default='fcn_resnet50', 
+                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original'],
+                        help='Model architecture')
     
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size for training')
@@ -63,6 +66,24 @@ def parse_args():
     
     return parser.parse_args()
 
+def create_model(args):
+    num_classes = 21 if args.dataset == 'pascal' else 19
+    
+    if args.model == 'fcn_resnet50':
+        model = fcn_resnet50(pretrained=True)
+        model.classifier[4] = nn.Conv2d(512, num_classes, kernel_size=(1, 1), stride=(1, 1))
+    elif args.model == 'deeplabv3_original':
+        model = deeplabv3_resnet101(pretrained=True)
+        model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1))
+    elif args.model == 'deeplabv3':
+        from torchvision import models
+        backbone = models._utils.IntermediateLayerGetter(
+            models.resnet101(pretrained=True),
+            {'layer4': 'out', 'layer1': 'low_level'}
+        )
+        model = DeepLabv3p(backbone, 2048, 256, num_classes, [12,24,36])
+    
+    return model
 
 def main():
     args = parse_args()
@@ -93,8 +114,7 @@ def main():
     
     train_labeled_loader, train_unlabeled_loader, val_loader = loader.create_loaders(use_unlabeled=True)
     
-    student_model = fcn_resnet50(pretrained=True)
-    student_model.classifier[4] = nn.Conv2d(512, num_classes, kernel_size=1)
+    student_model = create_model(args)
     student_model = student_model.to(device)
     
     teacher_model = TeacherModel(student_model, ema_decay=args.ema_decay).to(device)
