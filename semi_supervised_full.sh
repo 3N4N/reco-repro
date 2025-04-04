@@ -1,6 +1,12 @@
 python3 trainers/semi_supervised_full.py \
   --dataset "cityscapes" \
   --data-path "/local/home/sanjee23/dev/ReCo/dataset/cityscapes" \
-  --val-interval 100 \
-  --num-labeled 20 \
-  --model "deeplabv3_original" 
+  --val-interval 5000 \
+  --num-labeled 150 \
+  --model "deeplabv3" \
+  --reco  \
+  --reco-weight 1.0 \
+  --reco-temp 0.5 \
+  --reco-num-queries 256 \
+  --reco-num-negatives 256 \
+  --reco-threshold 0.97 \
