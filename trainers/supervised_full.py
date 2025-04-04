@@ -4,19 +4,17 @@ import argparse
 import torch
 import numpy as np
 from torch import optim, nn
+import torch.nn.functional as F
 from tqdm import tqdm
 from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 import sys
 from pathlib import Path
-
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-
 from data.cityscapes_data_loader import CityscapesDataset, CityscapesLoader
 from data.pascal_data_loader import PascalVOCDataset, PascalVOCLoader
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
-
-
+from network.deeplabv3 import DeepLabv3p
+from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semantic Segmentation Training Script')
@@ -25,7 +23,7 @@ def parse_args():
     parser.add_argument('--data_root', type=str, required=True, 
                         help='Path to dataset')
     parser.add_argument('--model', type=str, default='fcn_resnet50', 
-                        choices=['fcn_resnet50', 'deeplabv3'],
+                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original'],
                         help='Model architecture')
     parser.add_argument('--batch_size', type=int, default=None,
                         help='Override default batch size')
@@ -45,6 +43,21 @@ def parse_args():
                         help='Random seed for reproducibility')
     parser.add_argument('--num_labeled', type=int, default=None,
                         help='Number of labeled samples (for semi-supervised learning)')
+    
+    # ReCo arguments
+    parser.add_argument('--reco', type=bool, default=False, 
+                        help='Enable ReCo loss')
+    parser.add_argument('--reco_weight', type=float, default=1.0, 
+                        help='Weight for ReCo loss')
+    parser.add_argument('--reco_temp', type=float, default=0.5, 
+                        help='Temperature for ReCo loss')
+    parser.add_argument('--reco_num_queries', type=int, default=256, 
+                        help='Number of queries for ReCo')
+    parser.add_argument('--reco_num_negatives', type=int, default=256, 
+                        help='Number of negative keys for ReCo')
+    parser.add_argument('--reco_threshold', type=float, default=0.97, 
+                        help='Confidence threshold for hard query sampling in ReCo')
+    
     return parser.parse_args()
 
 def create_model(args):
@@ -53,9 +66,16 @@ def create_model(args):
     if args.model == 'fcn_resnet50':
         model = fcn_resnet50(pretrained=True)
         model.classifier[4] = nn.Conv2d(512, num_classes, kernel_size=(1, 1), stride=(1, 1))
-    elif args.model == 'deeplabv3':
+    elif args.model == 'deeplabv3_original':
         model = deeplabv3_resnet101(pretrained=True)
         model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1))
+    elif args.model == 'deeplabv3':
+        from torchvision import models
+        backbone = models._utils.IntermediateLayerGetter(
+            models.resnet101(pretrained=True),
+            {'layer4': 'out', 'layer1': 'low_level'}
+        )
+        model = DeepLabv3p(backbone, 2048, 256, num_classes, [12,24,36])
     
     return model
 
@@ -97,7 +117,6 @@ def main():
     
     model = create_model(args)
     model.to(device)
-    
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     criterion = nn.CrossEntropyLoss(ignore_index=-1)  
     
@@ -116,13 +135,33 @@ def main():
             img = img.to(device)
             mask = mask.long().to(device)
             
+            outputs = model(img)
+            loss = criterion(outputs['out'], mask)
+            
+            if args.reco:
+                reps = outputs['decoder']
+                
+                probs = F.softmax(outputs['out'], dim=1)
+                
+                reco_loss = reco_loss_func(
+                    rep=reps,
+                    label=mask,
+                    mask=(mask != -1), 
+                    prob=probs,
+                    strong_threshold=args.reco_threshold,
+                    temp=args.reco_temp,
+                    num_queries=args.reco_num_queries,
+                    num_negatives=args.reco_num_negatives
+                )
+                
+                if total_iterations % 100 == 0:
+                    print(f"ReCo loss: {reco_loss.item():.4f}")
+                
+                loss = loss + args.reco_weight * reco_loss
+            
             current_lr = adjust_learning_rate(optimizer, args.lr, total_iterations, args.total_iterations)
             
-            outputs = model(img)['out']
             optimizer.zero_grad()
-            
-            loss = criterion(outputs, mask)
-            
             loss.backward()
             optimizer.step()
             
@@ -133,6 +172,7 @@ def main():
             # Validation
             if total_iterations % val_interval == 0:
                 model.eval()
+                
                 val_running_loss = 0
                 val_iou = 0
                 num_batches = 0
