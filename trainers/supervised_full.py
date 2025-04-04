@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import os
 import argparse
 import torch
@@ -15,6 +14,7 @@ from data.cityscapes_data_loader import CityscapesDataset, CityscapesLoader
 from data.pascal_data_loader import PascalVOCDataset, PascalVOCLoader
 from network.deeplabv3 import DeepLabv3p
 from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
+from wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semantic Segmentation Training Script')
@@ -29,7 +29,7 @@ def parse_args():
                         help='Override default batch size')
     parser.add_argument('--lr', type=float, default=2.5e-3,
                         help='Initial learning rate')
-    parser.add_argument('--epochs', type=int, default=50,
+    parser.add_argument('--epochs', type=int, default=500,
                         help='Maximum number of epochs')
     parser.add_argument('--total_iterations', type=int, default=40000,
                         help='Total training iterations')
@@ -91,6 +91,13 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    wandb_config = vars(args)
+    init_wandb(
+        project_name="reco_v1",  
+        config=wandb_config,
+        run_name=f"{args.dataset}_{args.model}_{args.seed}"
+    )
+    
     if args.dataset == 'pascal':
         loader = PascalVOCLoader(
             data_path=args.data_root,
@@ -117,6 +124,9 @@ def main():
     
     model = create_model(args)
     model.to(device)
+    
+    watch_model(model)
+    
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     criterion = nn.CrossEntropyLoss(ignore_index=-1)  
     
@@ -138,6 +148,7 @@ def main():
             outputs = model(img)
             loss = criterion(outputs['out'], mask)
             
+            reco_loss_val = None
             if args.reco:
                 reps = outputs['decoder']
                 
@@ -154,8 +165,9 @@ def main():
                     num_negatives=args.reco_num_negatives
                 )
                 
+                reco_loss_val = reco_loss.item()
                 if total_iterations % 100 == 0:
-                    print(f"ReCo loss: {reco_loss.item():.4f}")
+                    print(f"ReCo loss: {reco_loss_val:.4f}")
                 
                 loss = loss + args.reco_weight * reco_loss
             
@@ -165,11 +177,13 @@ def main():
             loss.backward()
             optimizer.step()
             
+            if total_iterations % 10 == 0:
+                log_training_metrics(loss.item(), current_lr, epoch + 1, total_iterations, reco_loss_val)
+            
             total_iterations += 1
             pbar.update(1)
             pbar.set_description(f"Epoch: {epoch+1}/{args.epochs}, Iter: {total_iterations}/{args.total_iterations}, Loss: {loss.item():.4f}, LR: {current_lr:.6f}")
             
-            # Validation
             if total_iterations % val_interval == 0:
                 model.eval()
                 
@@ -198,13 +212,16 @@ def main():
                 print(f"Validation Loss: {val_loss:.4f}, Mean IoU: {mean_iou:.4f}")
                 print("-"*50)
                 
+                log_validation_metrics(val_loss, mean_iou, total_iterations)
+                
                 if mean_iou > best_iou:
                     best_iou = mean_iou
                     checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_best.pth")
                     torch.save(model.state_dict(), checkpoint_path)
                     print(f"Saved best model to {checkpoint_path}")
+                    
+                    update_summary(best_iou, total_iterations)
             
-            # Save checkpoint periodically
             if total_iterations % 10000 == 0:
                 checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_iter_{total_iterations}.pth")
                 torch.save({
@@ -227,10 +244,11 @@ def main():
     pbar.close()
     print(f"Training completed! Best validation IoU: {best_iou:.4f}")
     
-    # Save final model
     final_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_final.pth")
     torch.save(model.state_dict(), final_path)
     print(f"Saved final model to {final_path}")
+    
+    finish()
 
 if __name__ == "__main__":
     main()
