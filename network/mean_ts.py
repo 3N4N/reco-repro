@@ -25,7 +25,15 @@ class TeacherModel(nn.Module):
             teacher_output = self.model(unlabeled_imgs)['out']
             probs = F.softmax(teacher_output, dim=1)
             confidence, pseudo_labels = torch.max(probs, dim=1)
+ 
+            
             confidence_mask = confidence > confidence_threshold
+            
+            # print("probs", probs[0][0][0])
+            # print("teacher_output", teacher_output.shape)
+            # print("unlabeled_imgs", unlabeled_imgs.shape)
+            # print("confidence", confidence)
+            # print("confidence_mask", confidence_mask)
             
         return pseudo_labels, confidence_mask, confidence
     
