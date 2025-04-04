@@ -60,6 +60,7 @@ def parse_args():
                         help='Checkpoint saving interval (iterations)')
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed')
+    parser.add_argument('--gpu', type=int, default=1)
     
     return parser.parse_args()
 
@@ -67,7 +68,7 @@ def parse_args():
 def main():
     args = parse_args()
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:{:d}".format(args.gpu) if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -114,7 +115,7 @@ def main():
     pbar = tqdm(total=args.iterations)
     
     for epoch in range(args.max_epochs):
-        print(f"Epoch {epoch+1}/{args.max_epochs}")
+        # print(f"Epoch {epoch+1}/{args.max_epochs}")
         
         labeled_iter = iter(train_labeled_loader)
         unlabeled_iter = iter(train_unlabeled_loader)

@@ -22,29 +22,30 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Semantic Segmentation Training Script')
     parser.add_argument('--dataset', type=str, required=True, choices=['pascal', 'cityscapes'],
                         help='Dataset to train on (pascal or cityscapes)')
-    parser.add_argument('--data_root', type=str, required=True, 
+    parser.add_argument('--data-path', type=str, required=True, 
                         help='Path to dataset')
     parser.add_argument('--model', type=str, default='fcn_resnet50', 
                         choices=['fcn_resnet50', 'deeplabv3'],
                         help='Model architecture')
-    parser.add_argument('--batch_size', type=int, default=None,
+    parser.add_argument('--batch-size', type=int, default=None,
                         help='Override default batch size')
     parser.add_argument('--lr', type=float, default=2.5e-3,
                         help='Initial learning rate')
     parser.add_argument('--epochs', type=int, default=50,
                         help='Maximum number of epochs')
-    parser.add_argument('--total_iterations', type=int, default=40000,
+    parser.add_argument('--total-iterations', type=int, default=40000,
                         help='Total training iterations')
-    parser.add_argument('--val_interval', type=int, default=2000,
+    parser.add_argument('--val-interval', type=int, default=2000,
                         help='Validation interval (iterations)')
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints',
+    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                         help='Directory to save checkpoints')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num-workers', type=int, default=4,
                         help='Number of workers for data loading')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--num_labeled', type=int, default=None,
+    parser.add_argument('--num-labeled', type=int, default=None,
                         help='Number of labeled samples (for semi-supervised learning)')
+    parser.add_argument('--gpu', type=int, default=1)
     return parser.parse_args()
 
 def create_model(args):
@@ -68,12 +69,12 @@ def main():
     
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:{:d}".format(args.gpu) if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     if args.dataset == 'pascal':
         loader = PascalVOCLoader(
-            data_path=args.data_root,
+            data_path=args.data_path,
             num_labeled=args.num_labeled,
             seed=args.seed
         )
@@ -82,7 +83,7 @@ def main():
         num_classes = 21
     else:  # cityscapes
         loader = CityscapesLoader(
-            data_path=args.data_root,
+            data_path=args.data_path,
             num_labeled=args.num_labeled,
             seed=args.seed
         )
@@ -108,7 +109,7 @@ def main():
     pbar = tqdm(total=args.total_iterations)
     
     for epoch in range(args.epochs):
-        print(f"Epoch {epoch+1}/{args.epochs}")
+        # print(f"Epoch {epoch+1}/{args.epochs}")
         
         for i, (img, mask) in enumerate(train_loader):
             model.train()
