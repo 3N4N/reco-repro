@@ -3,6 +3,7 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 from tqdm import tqdm
@@ -15,7 +16,8 @@ sys.path.append(project_root)
 from data.cityscapes_data_loader import CityscapesLoader
 from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
+from network.deeplabv3 import DeepLabv3p
+from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
 
 
 def parse_args():
@@ -53,6 +55,20 @@ def parse_args():
                         help='Confidence threshold for pseudo-labels')
     parser.add_argument('--unsup-weight', type=float, default=0.5,
                         help='Weight for unsupervised loss')
+    
+    # ReCo loss arguments
+    parser.add_argument('--reco', action='store_true', default=False,
+                        help='Enable ReCo loss')
+    parser.add_argument('--reco-weight', type=float, default=1.0,
+                        help='Weight for ReCo loss')
+    parser.add_argument('--reco-temp', type=float, default=0.5,
+                        help='Temperature for ReCo loss')
+    parser.add_argument('--reco-num-queries', type=int, default=256,
+                        help='Number of queries for ReCo')
+    parser.add_argument('--reco-num-negatives', type=int, default=256,
+                        help='Number of negative keys for ReCo')
+    parser.add_argument('--reco-threshold', type=float, default=0.97,
+                        help='Confidence threshold for hard query sampling in ReCo')
     
     # Logging and checkpointing
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
@@ -155,24 +171,104 @@ def main():
             )
             
             student_model.train()
-            student_labeled_output = student_model(labeled_img)['out']
             
-            supervised_loss = criterion(student_labeled_output, labeled_mask)
+            student_labeled_output = student_model(labeled_img)
+            student_labeled_logits = student_labeled_output['out']
+            
+            supervised_loss = criterion(student_labeled_logits, labeled_mask)
             
             pseudo_labels, conf_mask, confidence = teacher_model.generate_pseudo_labels(
                 unlabeled_img, confidence_threshold=args.conf_thresh
             )
             
-            student_unlabeled_output = student_model(unlabeled_img)['out']
+            student_unlabeled_output = student_model(unlabeled_img)
+            student_unlabeled_logits = student_unlabeled_output['out']
             
             unsupervised_loss = calculate_unsupervised_loss(
-                student_unlabeled_output, pseudo_labels, conf_mask
+                student_unlabeled_logits, pseudo_labels, conf_mask
             )
             
             conf_ratio = conf_mask.float().mean().item()
             
             eta = conf_ratio if conf_ratio > 0 else 0.1
             total_loss = supervised_loss + args.unsup_weight * eta * unsupervised_loss
+            
+            if args.reco and 'decoder' in student_labeled_output and 'decoder' in student_unlabeled_output:
+                
+                labeled_rep = student_labeled_output['decoder']
+                unlabeled_rep = student_unlabeled_output['decoder']
+                
+                labeled_probs = F.softmax(student_labeled_logits, dim=1)
+                unlabeled_probs = F.softmax(student_unlabeled_logits, dim=1)
+                
+                labeled_valid_mask = (labeled_mask != -1)
+                
+                if labeled_rep.shape[2:] != unlabeled_rep.shape[2:]:
+                    if labeled_rep.shape[2] * labeled_rep.shape[3] < unlabeled_rep.shape[2] * unlabeled_rep.shape[3]:
+                        unlabeled_rep = F.interpolate(unlabeled_rep, size=labeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                    else:
+                        labeled_rep = F.interpolate(labeled_rep, size=unlabeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                
+                combined_rep = torch.cat([labeled_rep, unlabeled_rep], dim=0)
+                
+                B = unlabeled_img.shape[0]  
+                H, W = unlabeled_img.shape[2], unlabeled_img.shape[3] 
+
+                if conf_mask.dim() == 1: 
+                    conf_mask = conf_mask.reshape(B, H*W)  
+
+                conf_mask = conf_mask.reshape(B, 1, H, W)  
+
+                if pseudo_labels.dim() == 1:  
+                    pseudo_labels = pseudo_labels.reshape(B, H, W)  
+                elif pseudo_labels.dim() == 2 and pseudo_labels.shape[0] == B:
+                    pseudo_labels = pseudo_labels.reshape(B, H, W) 
+                
+                if labeled_mask.dim() == 3: 
+                    labeled_mask = labeled_mask.unsqueeze(1) 
+                if conf_mask.dim() == 2: 
+                    conf_mask = conf_mask.view(conf_mask.shape[0], 1, unlabeled_rep.shape[2], unlabeled_rep.shape[3])
+                
+                if labeled_mask.shape[2:] != labeled_rep.shape[2:]:
+                    labeled_mask_interp = F.interpolate(labeled_mask.float(), size=labeled_rep.shape[2:], mode='nearest').long()
+                    labeled_valid_mask = F.interpolate(labeled_valid_mask.unsqueeze(1).float(), size=labeled_rep.shape[2:], mode='nearest').bool()
+                else:
+                    labeled_mask_interp = labeled_mask
+                    
+                if pseudo_labels.shape[1:] != unlabeled_rep.shape[2:]:
+                    pseudo_labels_interp = F.interpolate(pseudo_labels.unsqueeze(1).float(), size=unlabeled_rep.shape[2:], mode='nearest').long().squeeze(1)
+                    conf_mask_interp = F.interpolate(conf_mask.float(), size=unlabeled_rep.shape[2:], mode='nearest').bool()
+                else:
+                    pseudo_labels_interp = pseudo_labels
+                    conf_mask_interp = conf_mask
+                
+                combined_labels = torch.cat([labeled_mask_interp.squeeze(1), pseudo_labels_interp], dim=0)
+                combined_mask = torch.cat([labeled_valid_mask.squeeze(1) if labeled_valid_mask.dim() > 3 else labeled_valid_mask, 
+                                         conf_mask_interp.squeeze(1) if conf_mask_interp.dim() > 3 else conf_mask_interp], dim=0)
+                
+                if labeled_probs.shape[2:] != labeled_rep.shape[2:]:
+                    labeled_probs = F.interpolate(labeled_probs, size=labeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                
+                if unlabeled_probs.shape[2:] != unlabeled_rep.shape[2:]:
+                    unlabeled_probs = F.interpolate(unlabeled_probs, size=unlabeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                
+                combined_probs = torch.cat([labeled_probs, unlabeled_probs], dim=0)
+                
+                reco_loss = reco_loss_func(
+                    rep=combined_rep,
+                    label=combined_labels,
+                    mask=combined_mask,
+                    prob=combined_probs,
+                    strong_threshold=args.reco_threshold,
+                    temp=args.reco_temp,
+                    num_queries=args.reco_num_queries,
+                    num_negatives=args.reco_num_negatives
+                )
+                
+                total_loss = total_loss + args.reco_weight * reco_loss
+                
+                if total_iterations % 100 == 0:
+                    print(f"ReCo loss: {reco_loss.item():.4f}")
             
             optimizer.zero_grad()
             total_loss.backward()
@@ -182,11 +278,15 @@ def main():
             
             total_iterations += 1
             pbar.update(1)
-            pbar.set_description(
-                f"Epoch: {epoch+1}/{args.max_epochs}, Iter: {total_iterations}/{args.iterations}, "
-                f"Loss: {total_loss.item():.4f}, Sup: {supervised_loss.item():.4f}, "
-                f"Unsup: {unsupervised_loss.item():.4f}, LR: {current_lr:.6f}, Conf: {conf_ratio:.2f}"
-            )
+            
+            desc = f"Epoch: {epoch+1}/{args.max_epochs}, Iter: {total_iterations}/{args.iterations}, " \
+                  f"Loss: {total_loss.item():.4f}, Sup: {supervised_loss.item():.4f}, " \
+                  f"Unsup: {unsupervised_loss.item():.4f}, LR: {current_lr:.6f}, Conf: {conf_ratio:.2f}"
+            
+            if args.reco:
+                desc += f", ReCo: {reco_loss.item():.4f}" if 'reco_loss' in locals() else ""
+                
+            pbar.set_description(desc)
             
             if total_iterations % args.val_interval == 0:
                 student_model.eval()
