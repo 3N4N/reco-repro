@@ -112,7 +112,7 @@ def main():
     init_wandb(
         project_name="reco_v1", 
         config=wandb_config,
-        run_name=f"{args.dataset}_{args.model}_labeled{args.label_ratio}_semi_supervised_full"
+        run_name=f"{args.dataset}_{args.model}_labeled{args.label_ratio}_{args.seed}_semi_supervised_full"
     )
     
     if args.dataset == 'pascal':

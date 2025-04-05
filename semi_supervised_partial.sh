@@ -1,7 +1,7 @@
 python3 trainers/semi_supervised_partial.py \
   --dataset "cityscapes" \
   --data-path "/local/home/sanjee23/dev/ReCo/dataset/cityscapes" \
-  --label-ratio "p0" \
+  --label-ratio "p25" \
   --seed 0 \
   --val-interval 500 \
   --reco  \
