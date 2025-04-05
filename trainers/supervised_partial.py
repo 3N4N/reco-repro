@@ -1,22 +1,20 @@
-#!/usr/bin/env python
 import os
 import argparse
 import torch
 import numpy as np
 from torch import optim, nn
+import torch.nn.functional as F
 from tqdm import tqdm
 from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 import sys
 from pathlib import Path
-
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-
 from data.cityscapes_data_loader import CityscapesDataset, CityscapesLoader
 from data.pascal_data_loader import PascalVOCDataset, PascalVOCLoader
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
-
-
+from network.deeplabv3 import DeepLabv3p
+from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
+from wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semantic Segmentation Training Script')
@@ -25,13 +23,13 @@ def parse_args():
     parser.add_argument('--data_root', type=str, required=True, 
                         help='Path to dataset')
     parser.add_argument('--model', type=str, default='fcn_resnet50', 
-                        choices=['fcn_resnet50', 'deeplabv3'],
+                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original'],
                         help='Model architecture')
     parser.add_argument('--batch_size', type=int, default=None,
                         help='Override default batch size')
     parser.add_argument('--lr', type=float, default=2.5e-3,
                         help='Initial learning rate')
-    parser.add_argument('--epochs', type=int, default=50,
+    parser.add_argument('--epochs', type=int, default=500,
                         help='Maximum number of epochs')
     parser.add_argument('--total_iterations', type=int, default=40000,
                         help='Total training iterations')
@@ -43,10 +41,23 @@ def parse_args():
                         help='Number of workers for data loading')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--num_labeled', type=int, default=None,
-                        help='Number of labeled samples (for semi-supervised learning)')
     parser.add_argument('--label_ratio', type=str, default="p0",
                         help='partial labels p0/p1/p5/p25')
+    
+    # ReCo arguments
+    parser.add_argument('--reco', type=bool, default=False, 
+                        help='Enable ReCo loss')
+    parser.add_argument('--reco_weight', type=float, default=1.0, 
+                        help='Weight for ReCo loss')
+    parser.add_argument('--reco_temp', type=float, default=0.5, 
+                        help='Temperature for ReCo loss')
+    parser.add_argument('--reco_num_queries', type=int, default=256, 
+                        help='Number of queries for ReCo')
+    parser.add_argument('--reco_num_negatives', type=int, default=256, 
+                        help='Number of negative keys for ReCo')
+    parser.add_argument('--reco_threshold', type=float, default=0.97, 
+                        help='Confidence threshold for hard query sampling in ReCo')
+    
     return parser.parse_args()
 
 def create_model(args):
@@ -55,9 +66,16 @@ def create_model(args):
     if args.model == 'fcn_resnet50':
         model = fcn_resnet50(pretrained=True)
         model.classifier[4] = nn.Conv2d(512, num_classes, kernel_size=(1, 1), stride=(1, 1))
-    elif args.model == 'deeplabv3':
+    elif args.model == 'deeplabv3_original':
         model = deeplabv3_resnet101(pretrained=True)
         model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1))
+    elif args.model == 'deeplabv3':
+        from torchvision import models
+        backbone = models._utils.IntermediateLayerGetter(
+            models.resnet101(pretrained=True),
+            {'layer4': 'out', 'layer1': 'low_level'}
+        )
+        model = DeepLabv3p(backbone, 2048, 256, num_classes, [12,24,36])
     
     return model
 
@@ -73,10 +91,16 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    wandb_config = vars(args)
+    init_wandb(
+        project_name="reco_v1",  
+        config=wandb_config,
+        run_name=f"{args.dataset}_{args.model}_{args.seed}"
+    )
+    
     if args.dataset == 'pascal':
         loader = PascalVOCLoader(
             data_path=args.data_root,
-            num_labeled=args.num_labeled,
             label_ratio=args.label_ratio,
             seed=args.seed
         )
@@ -86,7 +110,6 @@ def main():
     else:  # cityscapes
         loader = CityscapesLoader(
             data_path=args.data_root,
-            num_labeled=args.num_labeled,
             label_ratio=args.label_ratio,
             seed=args.seed
         )
@@ -101,6 +124,8 @@ def main():
     
     model = create_model(args)
     model.to(device)
+    
+    watch_model(model)
     
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     criterion = nn.CrossEntropyLoss(ignore_index=-1)  
@@ -120,23 +145,48 @@ def main():
             img = img.to(device)
             mask = mask.long().to(device)
             
+            outputs = model(img)
+            loss = criterion(outputs['out'], mask)
+            
+            reco_loss_val = None
+            if args.reco:
+                reps = outputs['decoder']
+                
+                probs = F.softmax(outputs['out'], dim=1)
+                
+                reco_loss = reco_loss_func(
+                    rep=reps,
+                    label=mask,
+                    mask=(mask != -1), 
+                    prob=probs,
+                    strong_threshold=args.reco_threshold,
+                    temp=args.reco_temp,
+                    num_queries=args.reco_num_queries,
+                    num_negatives=args.reco_num_negatives
+                )
+                
+                reco_loss_val = reco_loss.item()
+                if total_iterations % 100 == 0:
+                    print(f"ReCo loss: {reco_loss_val:.4f}")
+                
+                loss = loss + args.reco_weight * reco_loss
+            
             current_lr = adjust_learning_rate(optimizer, args.lr, total_iterations, args.total_iterations)
             
-            outputs = model(img)['out']
             optimizer.zero_grad()
-            
-            loss = criterion(outputs, mask)
-            
             loss.backward()
             optimizer.step()
+            
+            if total_iterations % 10 == 0:
+                log_training_metrics(loss.item(), current_lr, epoch + 1, total_iterations, reco_loss_val)
             
             total_iterations += 1
             pbar.update(1)
             pbar.set_description(f"Epoch: {epoch+1}/{args.epochs}, Iter: {total_iterations}/{args.total_iterations}, Loss: {loss.item():.4f}, LR: {current_lr:.6f}")
             
-            # Validation
             if total_iterations % val_interval == 0:
                 model.eval()
+                
                 val_running_loss = 0
                 val_iou = 0
                 num_batches = 0
@@ -162,13 +212,16 @@ def main():
                 print(f"Validation Loss: {val_loss:.4f}, Mean IoU: {mean_iou:.4f}")
                 print("-"*50)
                 
+                log_validation_metrics(val_loss, mean_iou, total_iterations)
+                
                 if mean_iou > best_iou:
                     best_iou = mean_iou
                     checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_best.pth")
                     torch.save(model.state_dict(), checkpoint_path)
                     print(f"Saved best model to {checkpoint_path}")
+                    
+                    update_summary(best_iou, total_iterations)
             
-            # Save checkpoint periodically
             if total_iterations % 10000 == 0:
                 checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_iter_{total_iterations}.pth")
                 torch.save({
@@ -191,10 +244,11 @@ def main():
     pbar.close()
     print(f"Training completed! Best validation IoU: {best_iou:.4f}")
     
-    # Save final model
     final_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_final.pth")
     torch.save(model.state_dict(), final_path)
     print(f"Saved final model to {final_path}")
+    
+    finish()
 
 if __name__ == "__main__":
     main()

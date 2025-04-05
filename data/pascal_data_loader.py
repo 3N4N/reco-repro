@@ -120,7 +120,7 @@ class PascalVOCDataset(Dataset):
         return img_tensor, mask_tensor
 
 
-def select_balanced_samples(root_dir, num_samples=5, is_training=True):
+def select_balanced_samples(root_dir, num_samples=None, is_training=True):
     
     if is_training:
         file_path = os.path.join(root_dir, 'train_aug.txt')
@@ -130,7 +130,7 @@ def select_balanced_samples(root_dir, num_samples=5, is_training=True):
     with open(file_path) as f:
         all_ids = f.read().splitlines()
     
-    if not is_training:
+    if (not is_training) or (not num_samples):
         return all_ids
     
     selected_ids = []
@@ -190,8 +190,8 @@ class PascalVOCLoader:
             )
         else:
             self.unlabeled_ids = select_balanced_samples(
-                data_path, is_training=True
-            )[0]  
+                data_path, num_samples=None ,is_training=True
+            )  
             self.labeled_ids = self.unlabeled_ids.copy()
             
         self.val_ids = select_balanced_samples(data_path, is_training=False)
