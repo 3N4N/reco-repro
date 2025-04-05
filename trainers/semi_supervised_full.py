@@ -15,7 +15,8 @@ sys.path.append(project_root)
 from data.cityscapes_data_loader import CityscapesLoader
 from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
+from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
+import utils.img_processing as img_processing
 
 save_stuff = False
 
@@ -131,7 +132,17 @@ def main():
             labeled_img = labeled_batch[0].float().to(device)
             labeled_mask = labeled_batch[1].long().to(device)
             unlabeled_img = unlabeled_batch[0].float().to(device)
+
+            _pseudo_labels, conf_mask, confidence = teacher_model.generate_pseudo_labels(
+                unlabeled_img, confidence_threshold=args.conf_thresh
+            )
             
+            unlabeled_img_aug, pseudo_labels = img_processing.augment_unlabeled_batch(
+                train_unlabeled_loader.dataset, unlabeled_img, _pseudo_labels,
+            )
+
+            # unlabeled_img_aug, pseudo_labels = unlabeled_img, _pseudo_labels
+
             current_lr = adjust_learning_rate(
                 optimizer, args.lr, total_iterations, args.iterations, args.power
             )
@@ -141,11 +152,8 @@ def main():
             
             supervised_loss = criterion(student_labeled_output, labeled_mask)
             
-            pseudo_labels, conf_mask, confidence = teacher_model.generate_pseudo_labels(
-                unlabeled_img, confidence_threshold=args.conf_thresh
-            )
-            
-            student_unlabeled_output = student_model(unlabeled_img)['out']
+            # student_unlabeled_output = student_model(unlabeled_img)['out']
+            student_unlabeled_output = student_model(unlabeled_img_aug)['out']
             
             unsupervised_loss = calculate_unsupervised_loss(
                 student_unlabeled_output, pseudo_labels, conf_mask

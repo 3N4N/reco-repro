@@ -9,6 +9,8 @@ import torch.utils.data.sampler as sampler
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 
+import utils.img_processing as img_processing
+
 class PascalVOCDataset(Dataset):
     def __init__(self, 
                  data_root, 
@@ -38,10 +40,10 @@ class PascalVOCDataset(Dataset):
     def __len__(self):
         return len(self.sample_ids)
     
-    def apply_transformations(self, img, mask):
+    def apply_transformations(self, img, mask, do_scale=False, do_randcrop=False, do_augmentation=False):
         width, height = img.size
         
-        if self.enable_transforms:
+        if self.enable_transforms or do_scale:
             scale_factor = random.uniform(self.scale_range[0], self.scale_range[1])
         else:
             scale_factor = 1.0
@@ -58,7 +60,7 @@ class PascalVOCDataset(Dataset):
             img = TF.pad(img, padding=(0, 0, pad_right, pad_bottom), padding_mode='reflect')
             mask = TF.pad(mask, padding=(0, 0, pad_right, pad_bottom), fill=255, padding_mode='constant')
         
-        if self.enable_transforms:
+        if self.enable_transforms or do_randcrop:
             i, j, h, w = transforms.RandomCrop.get_params(img, output_size=self.input_dims)
         else:
             i = (target_size[0] - crop_h) // 2 if target_size[0] > crop_h else 0
@@ -68,7 +70,7 @@ class PascalVOCDataset(Dataset):
         img = TF.crop(img, i, j, h, w)
         mask = TF.crop(mask, i, j, h, w)
         
-        if self.enable_transforms:
+        if self.enable_transforms or do_augmentation:
             if random.random() > 0.2:
                 brightness = random.uniform(0.75, 1.25)
                 contrast = random.uniform(0.75, 1.25)
@@ -95,10 +97,8 @@ class PascalVOCDataset(Dataset):
         
         mask_tensor[mask_tensor == 255] = -1
         
-        img_tensor = TF.normalize(img_tensor, 
-                                 mean=[0.485, 0.456, 0.406], 
-                                 std=[0.229, 0.224, 0.225])
-        
+        img_tensor = img_processing.normalize(img_tensor)
+
         return img_tensor, mask_tensor.squeeze(0)
     
     def __getitem__(self, idx):

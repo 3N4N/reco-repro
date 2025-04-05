@@ -14,8 +14,9 @@ sys.path.append(project_root)
 
 from data.cityscapes_data_loader import CityscapesDataset, CityscapesLoader
 from data.pascal_data_loader import PascalVOCDataset, PascalVOCLoader
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
 
+import network
+from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
 
 save_stuff = False
 
