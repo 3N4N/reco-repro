@@ -41,14 +41,14 @@ def batch_transform(dataset, imgs, masks, do_scale, do_randcrop, do_augmentation
     aug_imgs, aug_masks = torch.cat(img_list).to(device), torch.cat(mask_list).to(device)
     return aug_imgs, aug_masks
 
-def augment_unlabeled_batch(dataset, unlabeled_imgs, pseudo_labels):
+def augment_unlabeled_batch(dataset, unlabeled_imgs, pseudo_labels, mixing_strategy):
     aug_imgs, aug_labels = batch_transform(
         dataset, unlabeled_imgs, pseudo_labels,
         do_scale=True, do_randcrop=False, do_augmentation=False
     )
 
     aug_imgs, aug_labels = mix_batch(
-        unlabeled_imgs, pseudo_labels, mode='cutmix'
+        unlabeled_imgs, pseudo_labels, strategy=mixing_strategy
     )
 
     aug_imgs, aug_labels = batch_transform(
@@ -58,11 +58,11 @@ def augment_unlabeled_batch(dataset, unlabeled_imgs, pseudo_labels):
 
     return aug_imgs, aug_labels
 
-def mix_batch(imgs, labels, mode='classmix'):
+def mix_batch(imgs, labels, strategy):
     device = imgs.device
-    if mode == 'classmix':
+    if strategy == 'classmix':
         mixed_imgs, mixed_labels = classmix_batch(imgs, labels)
-    elif mode == 'cutmix':
+    elif strategy == 'cutmix':
         mixed_imgs, mixed_labels = mixing.cutmix(imgs.detach(), labels.detach())
     else:
         raise TypeError("Mode must be any of these: classmix, cutmix")

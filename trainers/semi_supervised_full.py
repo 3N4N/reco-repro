@@ -20,8 +20,6 @@ from trainers.wandb_utils import init_wandb, log_training_metrics, log_validatio
 import utils.img_processing as img_processing
 import wandb
 
-save_stuff = False
-
 def parse_args():
     parser = argparse.ArgumentParser(description='Semi-supervised semantic segmentation')
     
@@ -57,6 +55,8 @@ def parse_args():
                         help='Confidence threshold for pseudo-labels')
     parser.add_argument('--unsup-weight', type=float, default=0.5,
                         help='Weight for unsupervised loss')
+    parser.add_argument('--mixing-strategy', type=str, default='classmix',
+                        help='The mixing strategies to use')
     
     # ReCo loss arguments
     parser.add_argument('--reco', action='store_true', default=False,
@@ -82,6 +82,7 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed')
     parser.add_argument('--gpu', type=int, default=1)
+    parser.add_argument('--disable-saving', action='store_true', help='Disable checkpoint saving')
     
     return parser.parse_args()
 
@@ -106,6 +107,9 @@ def create_model(args):
 
 def main():
     args = parse_args()
+
+    save_stuff = not args.disable_saving
+    print(f'Checkpoint saving enabled: {save_stuff}')
     
     device = torch.device("cuda:{:d}".format(args.gpu) if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -183,7 +187,7 @@ def main():
             )
             
             unlabeled_img_aug, pseudo_labels = img_processing.augment_unlabeled_batch(
-                train_unlabeled_loader.dataset, unlabeled_img, _pseudo_labels,
+                train_unlabeled_loader.dataset, unlabeled_img, _pseudo_labels, args.mixing_strategy
             )
 
             # unlabeled_img_aug, pseudo_labels = unlabeled_img, _pseudo_labels

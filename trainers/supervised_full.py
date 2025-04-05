@@ -16,8 +16,6 @@ from network.deeplabv3 import DeepLabv3p
 from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
 from trainers.wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
 
-save_stuff = False
-
 def parse_args():
     parser = argparse.ArgumentParser(description='Semantic Segmentation Training Script')
     parser.add_argument('--dataset', type=str, required=True, choices=['pascal', 'cityscapes'],
@@ -46,6 +44,7 @@ def parse_args():
     parser.add_argument('--num-labeled', type=int, default=None,
                         help='Number of labeled samples (for semi-supervised learning)')
     parser.add_argument('--gpu', type=int, default=1)
+    parser.add_argument('--disable-saving', action='store_true', help='Disable checkpoint saving')
     
     # ReCo arguments
     parser.add_argument('--reco', type=bool, default=False, 
@@ -85,6 +84,9 @@ def create_model(args):
 def main():
     args = parse_args()
     print(f"Training on {args.dataset} dataset with {args.model} model")
+
+    save_stuff = not args.disable_saving
+    print(f'Checkpoint saving enabled: {save_stuff}')
     
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
