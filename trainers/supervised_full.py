@@ -13,36 +13,39 @@ sys.path.append(project_root)
 from data.cityscapes_data_loader import CityscapesDataset, CityscapesLoader
 from data.pascal_data_loader import PascalVOCDataset, PascalVOCLoader
 from network.deeplabv3 import DeepLabv3p
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
-from wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
+from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
+from trainers.wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
+
+save_stuff = False
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semantic Segmentation Training Script')
     parser.add_argument('--dataset', type=str, required=True, choices=['pascal', 'cityscapes'],
                         help='Dataset to train on (pascal or cityscapes)')
-    parser.add_argument('--data_root', type=str, required=True, 
+    parser.add_argument('--data-path', type=str, required=True, 
                         help='Path to dataset')
     parser.add_argument('--model', type=str, default='fcn_resnet50', 
                         choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original'],
                         help='Model architecture')
-    parser.add_argument('--batch_size', type=int, default=None,
+    parser.add_argument('--batch-size', type=int, default=None,
                         help='Override default batch size')
     parser.add_argument('--lr', type=float, default=2.5e-3,
                         help='Initial learning rate')
     parser.add_argument('--epochs', type=int, default=500,
                         help='Maximum number of epochs')
-    parser.add_argument('--total_iterations', type=int, default=40000,
+    parser.add_argument('--total-iterations', type=int, default=40000,
                         help='Total training iterations')
-    parser.add_argument('--val_interval', type=int, default=2000,
+    parser.add_argument('--val-interval', type=int, default=2000,
                         help='Validation interval (iterations)')
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints',
+    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                         help='Directory to save checkpoints')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num-workers', type=int, default=4,
                         help='Number of workers for data loading')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--num_labeled', type=int, default=None,
+    parser.add_argument('--num-labeled', type=int, default=None,
                         help='Number of labeled samples (for semi-supervised learning)')
+    parser.add_argument('--gpu', type=int, default=1)
     
     # ReCo arguments
     parser.add_argument('--reco', type=bool, default=False, 
@@ -88,7 +91,7 @@ def main():
     
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:{:d}".format(args.gpu) if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     wandb_config = vars(args)
@@ -100,7 +103,7 @@ def main():
     
     if args.dataset == 'pascal':
         loader = PascalVOCLoader(
-            data_path=args.data_root,
+            data_path=args.data_path,
             num_labeled=args.num_labeled,
             seed=args.seed
         )
@@ -109,7 +112,7 @@ def main():
         num_classes = 21
     else:  # cityscapes
         loader = CityscapesLoader(
-            data_path=args.data_root,
+            data_path=args.data_path,
             num_labeled=args.num_labeled,
             seed=args.seed
         )
@@ -137,7 +140,7 @@ def main():
     pbar = tqdm(total=args.total_iterations)
     
     for epoch in range(args.epochs):
-        print(f"Epoch {epoch+1}/{args.epochs}")
+        # print(f"Epoch {epoch+1}/{args.epochs}")
         
         for i, (img, mask) in enumerate(train_loader):
             model.train()
@@ -214,7 +217,7 @@ def main():
                 
                 log_validation_metrics(val_loss, mean_iou, total_iterations)
                 
-                if mean_iou > best_iou:
+                if save_stuff and mean_iou > best_iou:
                     best_iou = mean_iou
                     checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_best.pth")
                     torch.save(model.state_dict(), checkpoint_path)
@@ -222,7 +225,7 @@ def main():
                     
                     update_summary(best_iou, total_iterations)
             
-            if total_iterations % 10000 == 0:
+            if save_stuff and total_iterations % 10000 == 0:
                 checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_iter_{total_iterations}.pth")
                 torch.save({
                     'epoch': epoch + 1,
@@ -244,9 +247,10 @@ def main():
     pbar.close()
     print(f"Training completed! Best validation IoU: {best_iou:.4f}")
     
-    final_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_final.pth")
-    torch.save(model.state_dict(), final_path)
-    print(f"Saved final model to {final_path}")
+    if save_stuff:
+        final_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_final.pth")
+        torch.save(model.state_dict(), final_path)
+        print(f"Saved final model to {final_path}")
     
     finish()
 

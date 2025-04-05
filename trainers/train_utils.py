@@ -2,8 +2,6 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 def adjust_learning_rate(optimizer, initial_lr, iter, total_iter, power=0.9):
     lr = initial_lr * (1 - iter / total_iter) ** power
     for param_group in optimizer.param_groups:
@@ -41,7 +39,7 @@ def calculate_unsupervised_loss(outputs, pseudo_labels, conf_mask):
             ignore_index=-1
         )
     else:
-        unsup_loss = torch.tensor(0.0).to(device)
+        unsup_loss = torch.tensor(0.0).to(outputs.device)
     
     return unsup_loss
 
