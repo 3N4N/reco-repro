@@ -10,4 +10,6 @@ python3 trainers/semi_supervised_partial.py \
   --reco-num-queries 256 \
   --reco-num-negatives 256 \
   --reco-threshold 0.97 \
-  --model deeplabv3 
+  --model deeplabv3 \
+  --mixing-strategy cutmix \
+  --disable-saving
