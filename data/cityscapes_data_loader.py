@@ -134,7 +134,7 @@ class CityscapesDataset(Dataset):
         if self.label_ratio is None or self.mode == 'val':
             mask_dir = f'labels/{self.mode}'
         else:
-            mask_dir = f'labels/{self.mode}_p{self.label_ratio}_{self.random_seed}'
+            mask_dir = f'labels/{self.mode}_{self.label_ratio}_{self.random_seed}'
             
         mask_path = os.path.join(self.data_root, mask_dir, f'{sample_id}.png')
         mask = Image.open(mask_path)
@@ -145,7 +145,7 @@ class CityscapesDataset(Dataset):
         return img_tensor, mask_tensor
 
 
-def select_balanced_samples(root_dir, num_samples=5, is_training=True):
+def select_balanced_samples(root_dir, num_samples=None, is_training=True):
     
     if is_training:
         file_list = glob.glob(os.path.join(root_dir, 'images/train/*.png'))
@@ -154,7 +154,7 @@ def select_balanced_samples(root_dir, num_samples=5, is_training=True):
         
     all_ids = [int(os.path.basename(file).split('.')[0]) for file in file_list]
     
-    if not is_training:
+    if (not is_training) or (not num_samples):
         return all_ids
     
     selected_ids = []
@@ -236,8 +236,8 @@ class CityscapesLoader:
             )
         else:
             self.unlabeled_ids = select_balanced_samples(
-                data_path, is_training=True
-            )[0]  
+                data_path, num_samples=None, is_training=True
+            )
             self.labeled_ids = self.unlabeled_ids.copy()
             
         self.val_ids = select_balanced_samples(data_path, is_training=False)

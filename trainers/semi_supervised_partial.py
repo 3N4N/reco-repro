@@ -3,20 +3,21 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torchvision.models.segmentation import fcn_resnet50
+from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 from tqdm import tqdm
 import numpy as np
-
 import sys
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-
 from data.cityscapes_data_loader import CityscapesLoader
 from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou
-
+from network.deeplabv3 import DeepLabv3p
+from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
+from wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
+import wandb
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Semi-supervised semantic segmentation')
@@ -25,8 +26,11 @@ def parse_args():
                         help='Dataset to use (pascal or cityscapes)')
     parser.add_argument('--data-path', type=str, required=True,
                         help='Path to the dataset')
-    parser.add_argument('--num-labeled', type=int, default=5,
-                        help='Number of labeled examples')
+    parser.add_argument('--label-ratio', type=str, default="p0",
+                        help='partial labels p0/p1/p5/p25')
+    parser.add_argument('--model', type=str, default='fcn_resnet50', 
+                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original'],
+                        help='Model architecture')
     
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size for training')
@@ -40,10 +44,8 @@ def parse_args():
                         help='Power for polynomial decay of learning rate')
     parser.add_argument('--iterations', type=int, default=40000,
                         help='Total number of training iterations')
-    parser.add_argument('--max-epochs', type=int, default=100,
+    parser.add_argument('--max-epochs', type=int, default=500,
                         help='Maximum number of epochs')
-    parser.add_argument('--label_ratio', type=str, default="p0",
-                        help='partial labels p0/p1/p5/p25')
     
     # Model arguments
     parser.add_argument('--ema-decay', type=float, default=0.99,
@@ -52,6 +54,20 @@ def parse_args():
                         help='Confidence threshold for pseudo-labels')
     parser.add_argument('--unsup-weight', type=float, default=0.5,
                         help='Weight for unsupervised loss')
+    
+    # ReCo loss arguments
+    parser.add_argument('--reco', action='store_true', default=False,
+                        help='Enable ReCo loss')
+    parser.add_argument('--reco-weight', type=float, default=1.0,
+                        help='Weight for ReCo loss')
+    parser.add_argument('--reco-temp', type=float, default=0.5,
+                        help='Temperature for ReCo loss')
+    parser.add_argument('--reco-num-queries', type=int, default=256,
+                        help='Number of queries for ReCo')
+    parser.add_argument('--reco-num-negatives', type=int, default=256,
+                        help='Number of negative keys for ReCo')
+    parser.add_argument('--reco-threshold', type=float, default=0.97,
+                        help='Confidence threshold for hard query sampling in ReCo')
     
     # Logging and checkpointing
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
@@ -63,9 +79,26 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed')
     
-    
     return parser.parse_args()
 
+def create_model(args):
+    num_classes = 21 if args.dataset == 'pascal' else 19
+    
+    if args.model == 'fcn_resnet50':
+        model = fcn_resnet50(pretrained=True)
+        model.classifier[4] = nn.Conv2d(512, num_classes, kernel_size=(1, 1), stride=(1, 1))
+    elif args.model == 'deeplabv3_original':
+        model = deeplabv3_resnet101(pretrained=True)
+        model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1))
+    elif args.model == 'deeplabv3':
+        from torchvision import models
+        backbone = models._utils.IntermediateLayerGetter(
+            models.resnet101(pretrained=True),
+            {'layer4': 'out', 'layer1': 'low_level'}
+        )
+        model = DeepLabv3p(backbone, 2048, 256, num_classes, [12,24,36])
+    
+    return model
 
 def main():
     args = parse_args()
@@ -75,10 +108,16 @@ def main():
     
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     
+    wandb_config = vars(args)
+    init_wandb(
+        project_name="reco_v1", 
+        config=wandb_config,
+        run_name=f"{args.dataset}_{args.model}_labeled{args.label_ratio}_{args.seed}_semi_supervised_full"
+    )
+    
     if args.dataset == 'pascal':
         loader = PascalVOCLoader(
             data_path=args.data_path,
-            num_labeled=args.num_labeled,
             label_ratio=args.label_ratio,
             seed=args.seed
         )
@@ -87,7 +126,6 @@ def main():
     elif args.dataset == 'cityscapes':
         loader = CityscapesLoader(
             data_path=args.data_path,
-            num_labeled=args.num_labeled,
             label_ratio=args.label_ratio,
             seed=args.seed
         )
@@ -98,11 +136,12 @@ def main():
     
     train_labeled_loader, train_unlabeled_loader, val_loader = loader.create_loaders(use_unlabeled=True)
     
-    student_model = fcn_resnet50(pretrained=True)
-    student_model.classifier[4] = nn.Conv2d(512, num_classes, kernel_size=1)
+    student_model = create_model(args)
     student_model = student_model.to(device)
     
     teacher_model = TeacherModel(student_model, ema_decay=args.ema_decay).to(device)
+    
+    watch_model(student_model)
     
     optimizer = optim.SGD(
         student_model.parameters(),
@@ -140,18 +179,21 @@ def main():
             )
             
             student_model.train()
-            student_labeled_output = student_model(labeled_img)['out']
             
-            supervised_loss = criterion(student_labeled_output, labeled_mask)
+            student_labeled_output = student_model(labeled_img)
+            student_labeled_logits = student_labeled_output['out']
+            
+            supervised_loss = criterion(student_labeled_logits, labeled_mask)
             
             pseudo_labels, conf_mask, confidence = teacher_model.generate_pseudo_labels(
                 unlabeled_img, confidence_threshold=args.conf_thresh
             )
             
-            student_unlabeled_output = student_model(unlabeled_img)['out']
+            student_unlabeled_output = student_model(unlabeled_img)
+            student_unlabeled_logits = student_unlabeled_output['out']
             
             unsupervised_loss = calculate_unsupervised_loss(
-                student_unlabeled_output, pseudo_labels, conf_mask
+                student_unlabeled_logits, pseudo_labels, conf_mask
             )
             
             conf_ratio = conf_mask.float().mean().item()
@@ -159,19 +201,116 @@ def main():
             eta = conf_ratio if conf_ratio > 0 else 0.1
             total_loss = supervised_loss + args.unsup_weight * eta * unsupervised_loss
             
+            reco_loss_val = None
+            if args.reco and 'decoder' in student_labeled_output and 'decoder' in student_unlabeled_output:
+                
+                labeled_rep = student_labeled_output['decoder']
+                unlabeled_rep = student_unlabeled_output['decoder']
+                
+                labeled_probs = F.softmax(student_labeled_logits, dim=1)
+                unlabeled_probs = F.softmax(student_unlabeled_logits, dim=1)
+                
+                labeled_valid_mask = (labeled_mask != -1)
+                
+                if labeled_rep.shape[2:] != unlabeled_rep.shape[2:]:
+                    if labeled_rep.shape[2] * labeled_rep.shape[3] < unlabeled_rep.shape[2] * unlabeled_rep.shape[3]:
+                        unlabeled_rep = F.interpolate(unlabeled_rep, size=labeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                    else:
+                        labeled_rep = F.interpolate(labeled_rep, size=unlabeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                
+                combined_rep = torch.cat([labeled_rep, unlabeled_rep], dim=0)
+                
+                B = unlabeled_img.shape[0]  
+                H, W = unlabeled_img.shape[2], unlabeled_img.shape[3] 
+                if conf_mask.dim() == 1: 
+                    conf_mask = conf_mask.reshape(B, H*W)  
+                conf_mask = conf_mask.reshape(B, 1, H, W)  
+                if pseudo_labels.dim() == 1:  
+                    pseudo_labels = pseudo_labels.reshape(B, H, W)  
+                elif pseudo_labels.dim() == 2 and pseudo_labels.shape[0] == B:
+                    pseudo_labels = pseudo_labels.reshape(B, H, W) 
+                
+                if labeled_mask.dim() == 3: 
+                    labeled_mask = labeled_mask.unsqueeze(1) 
+                if conf_mask.dim() == 2: 
+                    conf_mask = conf_mask.view(conf_mask.shape[0], 1, unlabeled_rep.shape[2], unlabeled_rep.shape[3])
+                
+                if labeled_mask.shape[2:] != labeled_rep.shape[2:]:
+                    labeled_mask_interp = F.interpolate(labeled_mask.float(), size=labeled_rep.shape[2:], mode='nearest').long()
+                    labeled_valid_mask = F.interpolate(labeled_valid_mask.unsqueeze(1).float(), size=labeled_rep.shape[2:], mode='nearest').bool()
+                else:
+                    labeled_mask_interp = labeled_mask
+                    
+                if pseudo_labels.shape[1:] != unlabeled_rep.shape[2:]:
+                    pseudo_labels_interp = F.interpolate(pseudo_labels.unsqueeze(1).float(), size=unlabeled_rep.shape[2:], mode='nearest').long().squeeze(1)
+                    conf_mask_interp = F.interpolate(conf_mask.float(), size=unlabeled_rep.shape[2:], mode='nearest').bool()
+                else:
+                    pseudo_labels_interp = pseudo_labels
+                    conf_mask_interp = conf_mask
+                
+                combined_labels = torch.cat([labeled_mask_interp.squeeze(1), pseudo_labels_interp], dim=0)
+                combined_mask = torch.cat([labeled_valid_mask.squeeze(1) if labeled_valid_mask.dim() > 3 else labeled_valid_mask, 
+                                         conf_mask_interp.squeeze(1) if conf_mask_interp.dim() > 3 else conf_mask_interp], dim=0)
+                
+                if labeled_probs.shape[2:] != labeled_rep.shape[2:]:
+                    labeled_probs = F.interpolate(labeled_probs, size=labeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                
+                if unlabeled_probs.shape[2:] != unlabeled_rep.shape[2:]:
+                    unlabeled_probs = F.interpolate(unlabeled_probs, size=unlabeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                
+                combined_probs = torch.cat([labeled_probs, unlabeled_probs], dim=0)
+                
+                reco_loss = reco_loss_func(
+                    rep=combined_rep,
+                    label=combined_labels,
+                    mask=combined_mask,
+                    prob=combined_probs,
+                    strong_threshold=args.reco_threshold,
+                    temp=args.reco_temp,
+                    num_queries=args.reco_num_queries,
+                    num_negatives=args.reco_num_negatives
+                )
+                
+                reco_loss_val = reco_loss.item()
+                total_loss = total_loss + args.reco_weight * reco_loss
+                
+                if total_iterations % 100 == 0:
+                    print(f"ReCo loss: {reco_loss_val:.4f}")
+            
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
             
             teacher_model.update_weights(student_model)
             
+            if total_iterations % 10 == 0:
+                log_training_metrics(
+                    loss=total_loss.item(),
+                    current_lr=current_lr,
+                    epoch=epoch + 1,
+                    iteration=total_iterations,
+                    reco_loss=reco_loss_val
+                )
+                
+                metrics = {
+                    "train/supervised_loss": supervised_loss.item(),
+                    "train/unsupervised_loss": unsupervised_loss.item(),
+                    "train/reco_loss_val":reco_loss_val if reco_loss_val else 0,
+                    "train/confidence_ratio": conf_ratio
+                }
+                wandb.log(metrics, step=total_iterations)
+            
             total_iterations += 1
             pbar.update(1)
-            pbar.set_description(
-                f"Epoch: {epoch+1}/{args.max_epochs}, Iter: {total_iterations}/{args.iterations}, "
-                f"Loss: {total_loss.item():.4f}, Sup: {supervised_loss.item():.4f}, "
-                f"Unsup: {unsupervised_loss.item():.4f}, LR: {current_lr:.6f}, Conf: {conf_ratio:.2f}"
-            )
+            
+            desc = f"Epoch: {epoch+1}/{args.max_epochs}, Iter: {total_iterations}/{args.iterations}, " \
+                  f"Loss: {total_loss.item():.4f}, Sup: {supervised_loss.item():.4f}, " \
+                  f"Unsup: {unsupervised_loss.item():.4f}, LR: {current_lr:.6f}, Conf: {conf_ratio:.2f}"
+            
+            if args.reco and reco_loss_val is not None:
+                desc += f", ReCo: {reco_loss_val:.4f}"
+                
+            pbar.set_description(desc)
             
             if total_iterations % args.val_interval == 0:
                 student_model.eval()
@@ -200,12 +339,16 @@ def main():
                 print(f"Validation Loss: {val_loss:.4f}, Mean IoU: {mean_iou:.4f}")
                 print("-"*50)
                 
+                log_validation_metrics(val_loss, mean_iou, total_iterations)
+                
                 if mean_iou > best_iou:
                     best_iou = mean_iou
                     torch.save(
                         student_model.state_dict(), 
                         os.path.join(args.checkpoint_dir, "best_student_model.pth")
                     )
+                    
+                    update_summary(best_iou, total_iterations)
             
             if total_iterations % args.save_interval == 0:
                 torch.save({
@@ -230,7 +373,8 @@ def main():
         student_model.state_dict(), 
         os.path.join(args.checkpoint_dir, "final_student_model.pth")
     )
-
+    
+    finish()
 
 if __name__ == '__main__':
     main()

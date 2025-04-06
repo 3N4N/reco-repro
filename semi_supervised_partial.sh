@@ -1,6 +1,13 @@
 python3 trainers/semi_supervised_partial.py \
-  --dataset "pascal" \
-  --data-path "/local/home/sanjee23/dev/ReCo/dataset/pascal" \
-  --label_ratio "p0" \
+  --dataset "cityscapes" \
+  --data-path "/local/home/sanjee23/dev/ReCo/dataset/cityscapes" \
+  --label-ratio "p25" \
   --seed 0 \
-  --val-interval 100
+  --val-interval 500 \
+  --reco  \
+  --reco-weight 1.0 \
+  --reco-temp 0.5 \
+  --reco-num-queries 256 \
+  --reco-num-negatives 256 \
+  --reco-threshold 0.97 \
+  --model deeplabv3 
