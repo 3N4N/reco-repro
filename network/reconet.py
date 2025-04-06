@@ -16,12 +16,18 @@ class ReCoNet(DeepLabv3p):
         )
     def forward(self, x):
         classifier_output = super().forward(x)
-        prediction, decoder_output = classifier_output['out'], classifier_output['decoder']
+        prediction, prediction_large decoder_output = (
+            classifier_output['_out'],
+            classifier_output['out'],
+            class classifier_output['decoder']
+        )
         representation = self.representation(decoder_output)
-        representation = F.interpolate(representation, size=x.shape[-2:], mode='bilinear', align_corners=False)
+        representation_large = F.interpolate(representation, size=x.shape[-2:], mode='bilinear', align_corners=False)
         return {
-            'out': prediction,
-            'reco': representation,
+            '_out': prediction,
+            'out': prediction_large,
+            '_reco': representation,
+            'reco': representation_large,
         }
 
 if __name__ == '__main__':

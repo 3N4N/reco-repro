@@ -28,10 +28,11 @@ class DeepLabv3p(nn.Module):
         encoder_output = self.encoder(features['out'])
         decoder_output = self.decoder(encoder_output, features['low_level'])
         prediction = self.classifier(decoder_output)
-        prediction = F.interpolate(prediction, size=x.shape[-2:], mode='bilinear', align_corners=False)
+        prediction_large = F.interpolate(prediction, size=x.shape[-2:], mode='bilinear', align_corners=False)
 
         return {
-            'out': prediction,
+            '_out': prediction,
+            'out': prediction_large,
             'encoder': encoder_output,
             'decoder': decoder_output,
         }
