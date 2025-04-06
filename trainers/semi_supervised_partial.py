@@ -15,8 +15,9 @@ from data.cityscapes_data_loader import CityscapesLoader
 from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
 from network.deeplabv3 import DeepLabv3p
-from train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
-from wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
+from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
+from trainers.wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
+import utils.img_processing as img_processing
 import wandb
 
 def parse_args():
@@ -54,6 +55,8 @@ def parse_args():
                         help='Confidence threshold for pseudo-labels')
     parser.add_argument('--unsup-weight', type=float, default=0.5,
                         help='Weight for unsupervised loss')
+    parser.add_argument('--mixing-strategy', type=str, default='classmix',
+                        help='The mixing strategies to use')
     
     # ReCo loss arguments
     parser.add_argument('--reco', action='store_true', default=False,
@@ -78,6 +81,8 @@ def parse_args():
                         help='Checkpoint saving interval (iterations)')
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed')
+    parser.add_argument('--gpu', type=int, default=1)
+    parser.add_argument('--disable-saving', action='store_true', help='Disable checkpoint saving')
     
     return parser.parse_args()
 
@@ -102,8 +107,11 @@ def create_model(args):
 
 def main():
     args = parse_args()
+
+    save_stuff = not args.disable_saving
+    print(f'Checkpoint saving enabled: {save_stuff}')
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:{:d}".format(args.gpu) if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -173,7 +181,17 @@ def main():
             labeled_img = labeled_batch[0].float().to(device)
             labeled_mask = labeled_batch[1].long().to(device)
             unlabeled_img = unlabeled_batch[0].float().to(device)
+
+            _pseudo_labels, conf_mask, confidence = teacher_model.generate_pseudo_labels(
+                unlabeled_img, confidence_threshold=args.conf_thresh
+            )
             
+            unlabeled_img_aug, pseudo_labels = img_processing.augment_unlabeled_batch(
+                train_unlabeled_loader.dataset, unlabeled_img, _pseudo_labels, args.mixing_strategy
+            )
+
+            # unlabeled_img_aug, pseudo_labels = unlabeled_img, _pseudo_labels
+
             current_lr = adjust_learning_rate(
                 optimizer, args.lr, total_iterations, args.iterations, args.power
             )
@@ -185,11 +203,7 @@ def main():
             
             supervised_loss = criterion(student_labeled_logits, labeled_mask)
             
-            pseudo_labels, conf_mask, confidence = teacher_model.generate_pseudo_labels(
-                unlabeled_img, confidence_threshold=args.conf_thresh
-            )
-            
-            student_unlabeled_output = student_model(unlabeled_img)
+            student_unlabeled_output = student_model(unlabeled_img_aug)
             student_unlabeled_logits = student_unlabeled_output['out']
             
             unsupervised_loss = calculate_unsupervised_loss(
@@ -341,7 +355,7 @@ def main():
                 
                 log_validation_metrics(val_loss, mean_iou, total_iterations)
                 
-                if mean_iou > best_iou:
+                if save_stuff and mean_iou > best_iou:
                     best_iou = mean_iou
                     torch.save(
                         student_model.state_dict(), 
@@ -350,7 +364,7 @@ def main():
                     
                     update_summary(best_iou, total_iterations)
             
-            if total_iterations % args.save_interval == 0:
+            if save_stuff and total_iterations % args.save_interval == 0:
                 torch.save({
                     'epoch': epoch + 1,
                     'iteration': total_iterations,
@@ -369,10 +383,12 @@ def main():
     
     pbar.close()
     print(f"Training completed! Best validation IoU: {best_iou:.4f}")
-    torch.save(
-        student_model.state_dict(), 
-        os.path.join(args.checkpoint_dir, "final_student_model.pth")
-    )
+
+    if save_stuff:
+        torch.save(
+            student_model.state_dict(), 
+            os.path.join(args.checkpoint_dir, "final_student_model.pth")
+        )
     
     finish()
 
