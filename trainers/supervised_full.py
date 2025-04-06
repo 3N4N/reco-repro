@@ -7,12 +7,13 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 import sys
+from torchvision import models
 from pathlib import Path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 from data.cityscapes_data_loader import CityscapesDataset, CityscapesLoader
 from data.pascal_data_loader import PascalVOCDataset, PascalVOCLoader
-from network.deeplabv3 import DeepLabv3p
+from network.reconet import ReCoNet
 from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
 from trainers.wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
 
@@ -22,8 +23,8 @@ def parse_args():
                         help='Dataset to train on (pascal or cityscapes)')
     parser.add_argument('--data-path', type=str, required=True, 
                         help='Path to dataset')
-    parser.add_argument('--model', type=str, default='fcn_resnet50', 
-                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original'],
+    parser.add_argument('--model', type=str, default='reconet', 
+                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original', 'reconet'],
                         help='Model architecture')
     parser.add_argument('--batch-size', type=int, default=None,
                         help='Override default batch size')
@@ -71,13 +72,12 @@ def create_model(args):
     elif args.model == 'deeplabv3_original':
         model = deeplabv3_resnet101(pretrained=True)
         model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1))
-    elif args.model == 'deeplabv3':
-        from torchvision import models
+    elif args.model == 'reconet':
         backbone = models._utils.IntermediateLayerGetter(
             models.resnet101(pretrained=True),
             {'layer4': 'out', 'layer1': 'low_level'}
         )
-        model = DeepLabv3p(backbone, 2048, 256, num_classes, [12,24,36])
+        model = ReCoNet(backbone, 2048, 256, num_classes, [12, 24, 36])
     
     return model
 
@@ -155,14 +155,25 @@ def main():
             
             reco_loss_val = None
             if args.reco:
-                reps = outputs['decoder']
+                reps = outputs['_reco']
                 
-                probs = F.softmax(outputs['out'], dim=1)
+                probs = F.softmax(outputs['_out'], dim=1)
+                if reps.shape[2:] != mask.shape[1:]: 
+                    mask_interp = F.interpolate(mask.unsqueeze(1).float(), 
+                                            size=reps.shape[2:], 
+                                            mode='nearest').squeeze(1).long()
+                    
+                    valid_mask = F.interpolate((mask.unsqueeze(1) != -1).float(), 
+                                            size=reps.shape[2:], 
+                                            mode='nearest').squeeze(1) > 0.5
+                else:
+                    mask_interp = mask
+                    valid_mask = (mask != -1)
                 
                 reco_loss = reco_loss_func(
                     rep=reps,
-                    label=mask,
-                    mask=(mask != -1), 
+                    label=mask_interp,
+                    mask=valid_mask, 
                     prob=probs,
                     strong_threshold=args.reco_threshold,
                     temp=args.reco_temp,

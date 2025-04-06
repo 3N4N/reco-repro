@@ -3,7 +3,7 @@ python3 trainers/semi_supervised_full.py \
   --data-path "/local/home/sanjee23/dev/ReCo/dataset/cityscapes" \
   --val-interval 5000 \
   --num-labeled 150 \
-  --model "deeplabv3" \
+  --model "reconet" \
   --reco  \
   --reco-weight 1.0 \
   --reco-temp 0.5 \
