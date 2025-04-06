@@ -12,10 +12,13 @@ Enan
 
 Sanjeepan
 
+- [x] Implement and integrate Reco Loss 
+    - [x] Active Hard Key Sampling
+    - [x] Active Hard Query Sampling
 - [x] Implement Mean Teacher Student farmework
+- [x] Implement supervised learning pipeline (full and partial)
+- [x] Implement semi-supervised learning pipeline (full and partial)
 - [x] Implement dataloaders for pascal and cityscapes
-- [x] Implement supervised learning pipeline
-- [x] Implement semi-supervised learning pipeline
 
 
 Notes:
