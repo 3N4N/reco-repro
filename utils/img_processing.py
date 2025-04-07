@@ -48,7 +48,7 @@ def augment_unlabeled_batch(dataset, unlabeled_imgs, pseudo_labels, mixing_strat
     )
 
     aug_imgs, aug_labels = mix_batch(
-        unlabeled_imgs, pseudo_labels, strategy=mixing_strategy
+        aug_imgs, aug_labels, strategy=mixing_strategy
     )
 
     aug_imgs, aug_labels = batch_transform(
