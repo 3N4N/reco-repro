@@ -84,7 +84,7 @@ def parse_args():
                         help='Checkpoint saving interval (iterations)')
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed')
-    parser.add_argument('--gpu', type=int, default=1)
+    parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--disable-saving', action='store_true', help='Disable checkpoint saving')
     
     return parser.parse_args()
@@ -238,6 +238,10 @@ def main():
                 if labeled_mask.shape[2:] != labeled_rep.shape[2:]:
                     labeled_mask = F.interpolate(labeled_mask.float(), size=labeled_rep.shape[2:], mode='nearest').long()
                     labeled_valid_mask = F.interpolate(labeled_valid_mask.unsqueeze(1).float(), size=labeled_rep.shape[2:], mode='nearest').bool().squeeze(1)
+                    
+                if conf_mask.shape[1:] != unlabeled_rep.shape[2:]:
+                    conf_mask = conf_mask.unsqueeze(1) 
+                    conf_mask = F.interpolate(conf_mask.float(), size=unlabeled_rep.shape[2:], mode='nearest').bool()
                     
                 if pseudo_labels.shape[1:] != unlabeled_rep.shape[2:]:
                     pseudo_labels = F.interpolate(pseudo_labels.unsqueeze(1).float(), size=unlabeled_rep.shape[2:], mode='nearest').long().squeeze(1)

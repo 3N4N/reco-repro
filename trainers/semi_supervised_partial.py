@@ -30,7 +30,7 @@ def parse_args():
                         help='Dataset to use (pascal or cityscapes)')
     parser.add_argument('--data-path', type=str, required=True,
                         help='Path to the dataset')
-        parser.add_argument('--label-ratio', type=str, default="p0",
+    parser.add_argument('--label-ratio', type=str, default="p0",
                         help='partial labels p0/p1/p5/p25')
     parser.add_argument('--model', type=str, default='reconet', 
                         choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original', 'reconet'],
@@ -84,7 +84,7 @@ def parse_args():
                         help='Checkpoint saving interval (iterations)')
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed')
-    parser.add_argument('--gpu', type=int, default=1)
+    parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--disable-saving', action='store_true', help='Disable checkpoint saving')
     
     return parser.parse_args()
@@ -120,9 +120,9 @@ def main():
     
     wandb_config = vars(args)
     init_wandb(
-        project_name="reco_v0", 
+        project_name="reco_v2_semi_sup_class_mix", 
         config=wandb_config,
-        run_name=f"{args.dataset}_{args.model}_labeled{args.label_ratio}_{args.seed}_semi_supervised_partial"
+        run_name=f"{args.dataset}_{args.model}_labeled_{args.label_ratio}_{args.seed}_semi_supervised_partial"
     )
     
     if args.dataset == 'pascal':
@@ -231,6 +231,8 @@ def main():
                     conf_mask = conf_mask.reshape(B, 1, *unlabeled_rep.shape[2:])
                 elif conf_mask.dim() == 2:
                     conf_mask = conf_mask.view(B, 1, *unlabeled_rep.shape[2:])
+                    
+
                 
                 if pseudo_labels.dim() == 1:
                     pseudo_labels = pseudo_labels.reshape(B, *unlabeled_rep.shape[2:])
@@ -241,6 +243,10 @@ def main():
                     labeled_mask = F.interpolate(labeled_mask.float(), size=labeled_rep.shape[2:], mode='nearest').long()
                     labeled_valid_mask = F.interpolate(labeled_valid_mask.unsqueeze(1).float(), size=labeled_rep.shape[2:], mode='nearest').bool().squeeze(1)
                     
+                if conf_mask.shape[1:] != unlabeled_rep.shape[2:]:
+                    conf_mask = conf_mask.unsqueeze(1) 
+                    conf_mask = F.interpolate(conf_mask.float(), size=unlabeled_rep.shape[2:], mode='nearest').bool()
+                
                 if pseudo_labels.shape[1:] != unlabeled_rep.shape[2:]:
                     pseudo_labels = F.interpolate(pseudo_labels.unsqueeze(1).float(), size=unlabeled_rep.shape[2:], mode='nearest').long().squeeze(1)
                     conf_mask = F.interpolate(conf_mask.float(), size=unlabeled_rep.shape[2:], mode='nearest').bool()
