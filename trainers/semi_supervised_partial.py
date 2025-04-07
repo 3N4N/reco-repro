@@ -9,12 +9,15 @@ from torchvision.models.segmentation import fcn_resnet50, deeplabv3_resnet101
 from tqdm import tqdm
 import numpy as np
 import sys
+from torchvision import models
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
+
 from data.cityscapes_data_loader import CityscapesLoader
 from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
-from network.deeplabv3 import DeepLabv3p
+from network.reconet import ReCoNet
 from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
 from trainers.wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
 import utils.img_processing as img_processing
@@ -27,10 +30,10 @@ def parse_args():
                         help='Dataset to use (pascal or cityscapes)')
     parser.add_argument('--data-path', type=str, required=True,
                         help='Path to the dataset')
-    parser.add_argument('--label-ratio', type=str, default="p0",
+        parser.add_argument('--label-ratio', type=str, default="p0",
                         help='partial labels p0/p1/p5/p25')
-    parser.add_argument('--model', type=str, default='fcn_resnet50', 
-                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original'],
+    parser.add_argument('--model', type=str, default='reconet', 
+                        choices=['fcn_resnet50', 'deeplabv3', 'deeplabv3_original', 'reconet'],
                         help='Model architecture')
     
     parser.add_argument('--batch-size', type=int, default=32,
@@ -53,7 +56,7 @@ def parse_args():
                         help='EMA decay rate for teacher model')
     parser.add_argument('--conf-thresh', type=float, default=0.95,
                         help='Confidence threshold for pseudo-labels')
-    parser.add_argument('--unsup-weight', type=float, default=0.5,
+    parser.add_argument('--unsup-weight', type=float, default=1.0,
                         help='Weight for unsupervised loss')
     parser.add_argument('--mixing-strategy', type=str, default='classmix',
                         help='The mixing strategies to use')
@@ -95,13 +98,12 @@ def create_model(args):
     elif args.model == 'deeplabv3_original':
         model = deeplabv3_resnet101(pretrained=True)
         model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1))
-    elif args.model == 'deeplabv3':
-        from torchvision import models
+    elif args.model == 'reconet':
         backbone = models._utils.IntermediateLayerGetter(
             models.resnet101(pretrained=True),
             {'layer4': 'out', 'layer1': 'low_level'}
         )
-        model = DeepLabv3p(backbone, 2048, 256, num_classes, [12,24,36])
+        model = ReCoNet(backbone, 2048, 256, num_classes, [12, 24, 36])
     
     return model
 
@@ -118,9 +120,9 @@ def main():
     
     wandb_config = vars(args)
     init_wandb(
-        project_name="reco_v1", 
+        project_name="reco_v0", 
         config=wandb_config,
-        run_name=f"{args.dataset}_{args.model}_labeled{args.label_ratio}_{args.seed}_semi_supervised_full"
+        run_name=f"{args.dataset}_{args.model}_labeled{args.label_ratio}_{args.seed}_semi_supervised_partial"
     )
     
     if args.dataset == 'pascal':
@@ -190,8 +192,6 @@ def main():
                 train_unlabeled_loader.dataset, unlabeled_img, _pseudo_labels, args.mixing_strategy
             )
 
-            # unlabeled_img_aug, pseudo_labels = unlabeled_img, _pseudo_labels
-
             current_lr = adjust_learning_rate(
                 optimizer, args.lr, total_iterations, args.iterations, args.power
             )
@@ -213,65 +213,47 @@ def main():
             conf_ratio = conf_mask.float().mean().item()
             
             eta = conf_ratio if conf_ratio > 0 else 0.1
-            total_loss = supervised_loss + args.unsup_weight * eta * unsupervised_loss
+            total_loss = supervised_loss +  eta * unsupervised_loss
             
             reco_loss_val = None
-            if args.reco and 'decoder' in student_labeled_output and 'decoder' in student_unlabeled_output:
-                
-                labeled_rep = student_labeled_output['decoder']
-                unlabeled_rep = student_unlabeled_output['decoder']
-                
-                labeled_probs = F.softmax(student_labeled_logits, dim=1)
-                unlabeled_probs = F.softmax(student_unlabeled_logits, dim=1)
+            if args.reco:
+                labeled_rep = student_labeled_output['_reco']     
+                unlabeled_rep = student_unlabeled_output['_reco'] 
+                labeled_probs = F.softmax(student_labeled_output['_out'], dim=1)
+                unlabeled_probs = F.softmax(student_unlabeled_output["_out"], dim=1)
                 
                 labeled_valid_mask = (labeled_mask != -1)
+                if labeled_mask.dim() == 3:
+                    labeled_mask = labeled_mask.unsqueeze(1)
                 
-                if labeled_rep.shape[2:] != unlabeled_rep.shape[2:]:
-                    if labeled_rep.shape[2] * labeled_rep.shape[3] < unlabeled_rep.shape[2] * unlabeled_rep.shape[3]:
-                        unlabeled_rep = F.interpolate(unlabeled_rep, size=labeled_rep.shape[2:], mode='bilinear', align_corners=True)
-                    else:
-                        labeled_rep = F.interpolate(labeled_rep, size=unlabeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                B = unlabeled_img.shape[0]
+                if conf_mask.dim() == 1:
+                    conf_mask = conf_mask.reshape(B, 1, *unlabeled_rep.shape[2:])
+                elif conf_mask.dim() == 2:
+                    conf_mask = conf_mask.view(B, 1, *unlabeled_rep.shape[2:])
                 
-                combined_rep = torch.cat([labeled_rep, unlabeled_rep], dim=0)
-                
-                B = unlabeled_img.shape[0]  
-                H, W = unlabeled_img.shape[2], unlabeled_img.shape[3] 
-                if conf_mask.dim() == 1: 
-                    conf_mask = conf_mask.reshape(B, H*W)  
-                conf_mask = conf_mask.reshape(B, 1, H, W)  
-                if pseudo_labels.dim() == 1:  
-                    pseudo_labels = pseudo_labels.reshape(B, H, W)  
+                if pseudo_labels.dim() == 1:
+                    pseudo_labels = pseudo_labels.reshape(B, *unlabeled_rep.shape[2:])
                 elif pseudo_labels.dim() == 2 and pseudo_labels.shape[0] == B:
-                    pseudo_labels = pseudo_labels.reshape(B, H, W) 
-                
-                if labeled_mask.dim() == 3: 
-                    labeled_mask = labeled_mask.unsqueeze(1) 
-                if conf_mask.dim() == 2: 
-                    conf_mask = conf_mask.view(conf_mask.shape[0], 1, unlabeled_rep.shape[2], unlabeled_rep.shape[3])
+                    pseudo_labels = pseudo_labels.reshape(B, *unlabeled_rep.shape[2:])
                 
                 if labeled_mask.shape[2:] != labeled_rep.shape[2:]:
-                    labeled_mask_interp = F.interpolate(labeled_mask.float(), size=labeled_rep.shape[2:], mode='nearest').long()
-                    labeled_valid_mask = F.interpolate(labeled_valid_mask.unsqueeze(1).float(), size=labeled_rep.shape[2:], mode='nearest').bool()
-                else:
-                    labeled_mask_interp = labeled_mask
+                    labeled_mask = F.interpolate(labeled_mask.float(), size=labeled_rep.shape[2:], mode='nearest').long()
+                    labeled_valid_mask = F.interpolate(labeled_valid_mask.unsqueeze(1).float(), size=labeled_rep.shape[2:], mode='nearest').bool().squeeze(1)
                     
                 if pseudo_labels.shape[1:] != unlabeled_rep.shape[2:]:
-                    pseudo_labels_interp = F.interpolate(pseudo_labels.unsqueeze(1).float(), size=unlabeled_rep.shape[2:], mode='nearest').long().squeeze(1)
-                    conf_mask_interp = F.interpolate(conf_mask.float(), size=unlabeled_rep.shape[2:], mode='nearest').bool()
-                else:
-                    pseudo_labels_interp = pseudo_labels
-                    conf_mask_interp = conf_mask
-                
-                combined_labels = torch.cat([labeled_mask_interp.squeeze(1), pseudo_labels_interp], dim=0)
-                combined_mask = torch.cat([labeled_valid_mask.squeeze(1) if labeled_valid_mask.dim() > 3 else labeled_valid_mask, 
-                                         conf_mask_interp.squeeze(1) if conf_mask_interp.dim() > 3 else conf_mask_interp], dim=0)
-                
+                    pseudo_labels = F.interpolate(pseudo_labels.unsqueeze(1).float(), size=unlabeled_rep.shape[2:], mode='nearest').long().squeeze(1)
+                    conf_mask = F.interpolate(conf_mask.float(), size=unlabeled_rep.shape[2:], mode='nearest').bool()
+                    
                 if labeled_probs.shape[2:] != labeled_rep.shape[2:]:
-                    labeled_probs = F.interpolate(labeled_probs, size=labeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                    labeled_probs = F.interpolate(labeled_probs, size=labeled_rep.shape[2:], mode='bilinear', align_corners=False)
                 
                 if unlabeled_probs.shape[2:] != unlabeled_rep.shape[2:]:
-                    unlabeled_probs = F.interpolate(unlabeled_probs, size=unlabeled_rep.shape[2:], mode='bilinear', align_corners=True)
+                    unlabeled_probs = F.interpolate(unlabeled_probs, size=unlabeled_rep.shape[2:], mode='bilinear', align_corners=False)
                 
+                combined_rep = torch.cat([labeled_rep, unlabeled_rep], dim=0)
+                combined_labels = torch.cat([labeled_mask.squeeze(1), pseudo_labels], dim=0)
+                combined_mask = torch.cat([labeled_valid_mask, conf_mask.squeeze(1)], dim=0)
                 combined_probs = torch.cat([labeled_probs, unlabeled_probs], dim=0)
                 
                 reco_loss = reco_loss_func(
@@ -309,7 +291,7 @@ def main():
                 metrics = {
                     "train/supervised_loss": supervised_loss.item(),
                     "train/unsupervised_loss": unsupervised_loss.item(),
-                    "train/reco_loss_val":reco_loss_val if reco_loss_val else 0,
+                    "train/reco_loss_val": reco_loss_val if reco_loss_val else 0,
                     "train/confidence_ratio": conf_ratio
                 }
                 wandb.log(metrics, step=total_iterations)
@@ -337,7 +319,9 @@ def main():
                         img = img_mask[0].float().to(device)
                         mask = img_mask[1].long().to(device)
                         
-                        y_pred = student_model(img)['out']
+                        output = student_model(img)
+                        y_pred = output['out']
+                            
                         loss = criterion(y_pred, mask)
                         
                         batch_iou = compute_iou(y_pred, mask, num_classes)
