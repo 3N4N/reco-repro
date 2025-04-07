@@ -56,7 +56,7 @@ def parse_args():
                         help='EMA decay rate for teacher model')
     parser.add_argument('--conf-thresh', type=float, default=0.95,
                         help='Confidence threshold for pseudo-labels')
-    parser.add_argument('--unsup-weight', type=float, default=0.5,
+    parser.add_argument('--unsup-weight', type=float, default=1.0,
                         help='Weight for unsupervised loss')
     parser.add_argument('--mixing-strategy', type=str, default='classmix',
                         help='The mixing strategies to use')
@@ -211,14 +211,14 @@ def main():
             conf_ratio = conf_mask.float().mean().item()
             
             eta = conf_ratio if conf_ratio > 0 else 0.1
-            total_loss = supervised_loss + args.unsup_weight * eta * unsupervised_loss
+            total_loss = supervised_loss +  eta * unsupervised_loss
             
             reco_loss_val = None
             if args.reco:
-                labeled_rep = student_labeled_output['reco']     
-                unlabeled_rep = student_unlabeled_output['reco'] 
-                labeled_probs = F.softmax(student_labeled_logits, dim=1)
-                unlabeled_probs = F.softmax(student_unlabeled_logits, dim=1)
+                labeled_rep = student_labeled_output['_reco']     
+                unlabeled_rep = student_unlabeled_output['_reco'] 
+                labeled_probs = F.softmax(student_labeled_output['_out'], dim=1)
+                unlabeled_probs = F.softmax(student_unlabeled_output["_out"], dim=1)
                 
                 labeled_valid_mask = (labeled_mask != -1)
                 if labeled_mask.dim() == 3:

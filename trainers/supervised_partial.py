@@ -98,7 +98,7 @@ def main():
     
     wandb_config = vars(args)
     init_wandb(
-        project_name="reco_v1",  
+        project_name="reco_v2",  
         config=wandb_config,
         run_name=f"{args.dataset}_{args.model}_{args.label_ratio}_{args.seed}_supervised"
     )
@@ -239,7 +239,7 @@ def main():
                     update_summary(best_iou, total_iterations)
             
             if save_stuff and total_iterations % 10000 == 0:
-                checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_iter_{total_iterations}.pth")
+                checkpoint_path = os.path.join(args.checkpoint_dir, f"{args.dataset}_{args.model}_{args.label_ratio}_{args.seed}_supervised_iter_{total_iterations}.pth")
                 torch.save({
                     'epoch': epoch + 1,
                     'iteration': total_iterations,
