@@ -14,7 +14,7 @@ def compute_iou(outputs, targets, num_classes):
     preds = torch.argmax(outputs, dim=1)
     
     ious = []
-    for cls in range(1, num_classes):
+    for cls in range(0, num_classes):
         pred_inds = preds == cls
         target_inds = targets == cls
         
