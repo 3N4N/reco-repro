@@ -20,7 +20,8 @@ def cutmix(X, Y):
     idx = torch.randperm(X.size(0))
     Xs, Ys = X[idx, :,:,:], Y[idx, :,:]
 
-    lam = np.random.uniform()
+    # lam = np.random.uniform()
+    lam = np.random.beta(0,1)
     rx = np.random.uniform(0,W)
     ry = np.random.uniform(0,H)
     rw = np.sqrt(1-lam)
