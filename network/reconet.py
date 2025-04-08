@@ -11,7 +11,7 @@ class ReCoNet(DeepLabv3p):
         self.representation = nn.Sequential(
             nn.Conv2d(304, 256, 3, padding=1, bias=False),
             nn.BatchNorm2d(256),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, low_level_channels, 1)
         )
     def forward(self, x):

@@ -8,6 +8,22 @@ def adjust_learning_rate(optimizer, initial_lr, iter, total_iter, power=0.9):
         param_group['lr'] = lr
     return lr
 
+class IOU:
+    def __init__(self, num_classes, device):
+        self.n = num_classes
+        self.mat = torch.zeros((self.n, self.n), dtype=torch.int64, device=device)
+    def update(self, pred, target):
+        with torch.no_grad():
+            k = (target >= 0) & (target < self.n)
+            inds = self.n * target[k].to(torch.int64) + pred[k]
+            self.mat += torch.bincount(inds, minlength=self.n ** 2).reshape(self.n, self.n)
+    def get(self):
+        h = self.mat.float()
+        acc = torch.diag(h).sum() / h.sum()
+        iu = torch.diag(h) / (h.sum(1) + h.sum(0) - torch.diag(h))
+        return torch.mean(iu).item()
+
+
 
 def compute_iou(outputs, targets, num_classes):
     smooth = 1e-6

@@ -19,6 +19,7 @@ from data.pascal_data_loader import PascalVOCLoader
 from network.mean_ts import TeacherModel
 from network.reconet import ReCoNet
 from trainers.train_utils import adjust_learning_rate, calculate_unsupervised_loss, compute_iou, reco_loss_func
+from trainers.train_utils import IOU
 from trainers.wandb_utils import init_wandb, log_training_metrics, log_validation_metrics, watch_model, update_summary, finish
 import utils.img_processing as img_processing
 import wandb
@@ -100,10 +101,10 @@ def create_model(args):
         model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1))
     elif args.model == 'reconet':
         backbone = models._utils.IntermediateLayerGetter(
-            models.resnet101(pretrained=True),
+            models.resnet101(pretrained=True, replace_stride_with_dilation=[False, False, True]), # [False, True, True]
             {'layer4': 'out', 'layer1': 'low_level'}
         )
-        model = ReCoNet(backbone, 2048, 256, num_classes, [12, 24, 36])
+        model = ReCoNet(backbone, 2048, 256, num_classes, [6,12,18]) # [12, 24, 36]
     
     return model
 
@@ -315,6 +316,7 @@ def main():
                 val_running_loss = 0
                 val_iou = 0
                 num_batches = 0
+                iou = IOU(num_classes, device)
                 
                 with torch.no_grad():
                     for idx, img_mask in enumerate(val_loader):
@@ -326,13 +328,15 @@ def main():
                             
                         loss = criterion(y_pred, mask)
                         
-                        batch_iou = compute_iou(y_pred, mask, num_classes)
-                        val_iou += batch_iou
+                        # batch_iou = compute_iou(y_pred, mask, num_classes)
+                        # val_iou += batch_iou
+                        iou.update(y_pred.argmax(1).flatten(), mask.flatten())
                         val_running_loss += loss.item()
                         num_batches += 1
                     
                     val_loss = val_running_loss / num_batches
-                    mean_iou = val_iou / num_batches
+                    # mean_iou = val_iou / num_batches
+                    mean_iou = iou.get(iou_mat)
                 
                 print("-"*50)
                 print(f"Epoch: {epoch+1}/{args.max_epochs}, Iteration: {total_iterations}/{args.iterations}")
@@ -341,14 +345,14 @@ def main():
                 
                 log_validation_metrics(val_loss, mean_iou, total_iterations)
                 
-                if save_stuff and mean_iou > best_iou:
+                if mean_iou > best_iou:
                     best_iou = mean_iou
-                    torch.save(
-                        student_model.state_dict(), 
-                        os.path.join(args.checkpoint_dir, "best_student_model.pth")
-                    )
-                    
-                    update_summary(best_iou, total_iterations)
+                    if save_stuff:
+                        torch.save(
+                            student_model.state_dict(), 
+                            os.path.join(args.checkpoint_dir, "best_student_model.pth")
+                        )
+                        update_summary(best_iou, total_iterations)
             
             if save_stuff and total_iterations % args.save_interval == 0:
                 torch.save({
