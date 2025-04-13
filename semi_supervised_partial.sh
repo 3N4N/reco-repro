@@ -1,6 +1,6 @@
-# python3 trainers/semi_supervised_partial.py \
+# python -m trainers.semi_supervised_partial \
 #   --dataset "cityscapes" \
-#   --data-path "/local/home/sanjee23/dev/ReCo/dataset/cityscapes" \
+#   --data-path "dataset/cityscapes" \
 #   --label-ratio "p0" \
 #   --seed 0 \
 #   --val-interval 500 \
@@ -15,15 +15,15 @@ MAX_JOBS=8
 # Array of all parameter sets
 params=(
   # Cityscapes dataset commands
-  # "--dataset cityscapes --data-path /local/home/sanjee23/dev/ReCo/dataset/cityscapes --label-ratio p0 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
-  # "--dataset cityscapes --data-path /local/home/sanjee23/dev/ReCo/dataset/cityscapes --label-ratio p1 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
-  # "--dataset cityscapes --data-path /local/home/sanjee23/dev/ReCo/dataset/cityscapes --label-ratio p5 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
-  # "--dataset cityscapes --data-path /local/home/sanjee23/dev/ReCo/dataset/cityscapes --label-ratio p25 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset cityscapes --data-path dataset/cityscapes --label-ratio p0 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset cityscapes --data-path dataset/cityscapes --label-ratio p1 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset cityscapes --data-path dataset/cityscapes --label-ratio p5 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset cityscapes --data-path dataset/cityscapes --label-ratio p25 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
   # Pascal dataset commands
-  # "--dataset pascal --data-path /local/home/sanjee23/dev/ReCo/dataset/pascal --label-ratio p0 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
-  # "--dataset pascal --data-path /local/home/sanjee23/dev/ReCo/dataset/pascal --label-ratio p1 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
-  "--dataset pascal --data-path /local/home/sanjee23/dev/ReCo/dataset/pascal --label-ratio p5 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
-  "--dataset pascal --data-path /local/home/sanjee23/dev/ReCo/dataset/pascal --label-ratio p25 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset pascal --data-path dataset/pascal --label-ratio p0 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset pascal --data-path dataset/pascal --label-ratio p1 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset pascal --data-path dataset/pascal --label-ratio p5 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
+  "--dataset pascal --data-path dataset/pascal --label-ratio p25 --seed 0 --val-interval 500 --model reconet --mixing-strategy classmix "
 )
 
 # Launch jobs
