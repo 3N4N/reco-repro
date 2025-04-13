@@ -228,7 +228,7 @@ def main():
                         num_batches += 1
                     
                     val_loss = val_running_loss / num_batches
-                    mean_iou = iou.get(iou_mat)
+                    mean_iou = iou.get()
                 
                 print("-"*50)
                 print(f"Epoch: {epoch+1}/{args.epochs}, Iteration: {total_iterations}/{args.total_iterations}")
