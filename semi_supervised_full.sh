@@ -1,6 +1,6 @@
-python3 trainers/semi_supervised_full.py \
+python -m trainers.semi_supervised_full \
   --dataset "cityscapes" \
-  --data-path "/local/home/sanjee23/dev/ReCo/dataset/cityscapes" \
+  --data-path "dataset/cityscapes" \
   --val-interval 5000 \
   --num-labeled 150 \
   --model "reconet" \
