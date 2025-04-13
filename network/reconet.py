@@ -6,6 +6,14 @@ from torchvision import models
 from .deeplabv3 import DeepLabv3p
 
 class ReCoNet(DeepLabv3p):
+    '''
+    ReCo architecture for image segmentation
+
+    Extends DeepLabV3+ by adding a representation head parallel to the decoder
+    classifier which projects the encoder features to a higher dimensional space.
+
+    See https://shikun.io/projects/regional-contrast
+    '''
     def __init__(self, backbone, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
         super().__init__(backbone, in_channels, low_level_channels, num_classes, aspp_dilate)
         self.representation = nn.Sequential(
@@ -33,7 +41,7 @@ class ReCoNet(DeepLabv3p):
 if __name__ == '__main__':
     from torchvision import models
     backbone = models._utils.IntermediateLayerGetter(
-        models.resnet101(pretrained=True),
+        models.resnet101(pretrained=True, replace_stride_with_dilation=[False, True, True]),
         {'layer4': 'out', 'layer1': 'low_level'}
     )
     model = ReCoNet(backbone, 2048, 256, 21, [12,24,36])

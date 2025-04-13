@@ -3,7 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DeepLabv3p(nn.Module):
+    '''
+    DeepLabV3+ architecture for image segmentation
+
+    See https://arxiv.org/abs/1802.02611
+    '''
     def __init__(self, backbone, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
+        '''
+        Set up the backbone and the encoder-decoder modules
+        '''
         super(DeepLabv3p, self).__init__()
 
         self.backbone = backbone
@@ -106,7 +114,7 @@ class ASPP(nn.Module):
 if __name__ == '__main__':
     from torchvision import models
     backbone = models._utils.IntermediateLayerGetter(
-        models.resnet101(pretrained=True),
+        models.resnet101(pretrained=True, replace_stride_with_dilation=[False, True, True]),
         {'layer4': 'out', 'layer1': 'low_level'}
     )
     model = DeepLabv3p(backbone, 2048, 256, 21, [12,24,36])
