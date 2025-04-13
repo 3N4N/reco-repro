@@ -36,4 +36,3 @@ class TeacherModel(nn.Module):
             # print("confidence_mask", confidence_mask)
             
         return pseudo_labels, confidence_mask, confidence
-    
